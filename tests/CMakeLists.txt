@@ -9,3 +9,7 @@ add_test(NAME stack COMMAND test_stack)
 add_executable(test_ctx unit/test_ctx.c)
 target_link_libraries(test_ctx PRIVATE corocc)
 add_test(NAME ctx COMMAND test_ctx)
+
+add_executable(test_ctx_return unit/test_ctx_return.c)
+target_link_libraries(test_ctx_return PRIVATE corocc)
+add_test(NAME ctx_return COMMAND test_ctx_return)
