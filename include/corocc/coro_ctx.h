@@ -31,14 +31,12 @@ extern "C" {
  * an implementation detail and PRIVATE: never read or write them directly.
  * The layout is part of the documented ABI.
  */
-typedef struct coro_ctx coro_ctx;
-
 typedef struct coro_ctx {
     void*             fctx;   /* PRIVATE: saved register frame (backend-internal). */
     const coro_stack* stack;  /* PRIVATE: borrowed stack range (ASan hooks etc.). */
     void            (*entry)(void*); /* PRIVATE: coroutine entry function. */
     void*             arg;    /* PRIVATE: opaque argument forwarded to entry. */
-    coro_ctx*         back;   /* PRIVATE: resumer context (sentinel target). */
+    struct coro_ctx*  back;   /* PRIVATE: resumer context (sentinel target). */
     void*             asan_fake; /* PRIVATE: ASan fake-stack save handle handed
                                     over at a switch into this context; only
                                     meaningful when the implementation is built
