@@ -14,6 +14,12 @@ add_executable(test_ctx_return unit/test_ctx_return.c)
 target_link_libraries(test_ctx_return PRIVATE corocc)
 add_test(NAME ctx_return COMMAND test_ctx_return)
 
+# Repeated round trips through one pair of context objects: guards against
+# saved-frame slots being overwritten with the resumer's frame.
+add_executable(test_ctx_pingpong unit/test_ctx_pingpong.c)
+target_link_libraries(test_ctx_pingpong PRIVATE corocc)
+add_test(NAME ctx_pingpong COMMAND test_ctx_pingpong)
+
 # The overflow is exercised in a child process: the child faults on the
 # guard page (SIGSEGV), and the parent asserts that death-by-SIGSEGV is what
 # happened. The test itself passes when that holds.
@@ -27,16 +33,23 @@ target_link_libraries(test_ctx_asan PRIVATE corocc)
 add_test(NAME ctx_asan COMMAND test_ctx_asan)
 
 # Coexistence with the real Boost.Context in one binary (proves the symbol
-# renaming took effect). Registered only when Boost.Context is available.
+# renaming took effect). Registered only for native builds: cross builds
+# would link the host's Boost objects into a foreign-arch binary, and a cross
+# CI host has no Boost toolchain for the target anyway.
 # (Plain find_path/find_library is used instead of find_package(Boost): the
 #  Ubuntu Boost CMake toolset-detection errors out under GCC.)
 find_path(BOOST_CONTEXT_INCLUDE boost/context/fiber.hpp)
 find_library(BOOST_CONTEXT_LIB NAMES boost_context)
 find_library(BOOST_SYSTEM_LIB NAMES boost_system)
-if (BOOST_CONTEXT_INCLUDE AND BOOST_CONTEXT_LIB)
+if (BOOST_CONTEXT_INCLUDE AND BOOST_CONTEXT_LIB AND NOT CMAKE_CROSSCOMPILING)
     add_executable(test_boost_coexist coexist/test_boost_coexist.cpp)
     target_include_directories(test_boost_coexist PRIVATE ${BOOST_CONTEXT_INCLUDE})
     target_link_libraries(test_boost_coexist PRIVATE corocc
         ${BOOST_CONTEXT_LIB} ${BOOST_SYSTEM_LIB})
     add_test(NAME boost_coexist COMMAND test_boost_coexist)
 endif()
+
+# Context-switch cost benchmark. Not a test: it reports a figure instead of
+# asserting one, so it is excluded from ctest.
+add_executable(bench_switch perf/bench_switch.c)
+target_link_libraries(bench_switch PRIVATE corocc)

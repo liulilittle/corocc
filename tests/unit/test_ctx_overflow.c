@@ -35,14 +35,21 @@ static void run_tests(void) {
         CHECK(0 && "waitpid failed");
         return;
     }
-    /* A terminating-by-signal death is the expected PASS outcome: the access
-       landed in the PROT_NONE guard page. Anything that "returned" (normal
-       exit code 2 from run_overflowing_coroutine) means the guard failed. */
-    CHECK(WIFSIGNALED(status));
+    /* The overflow must be FATAL, never a silent return. Two death shapes are
+       acceptable because both prove the guard page caught the write:
+         - death by SIGSEGV: the PROT_NONE page faulted directly;
+         - a nonzero exit status: under an ASan-instrumented build the
+           sanitizer intercepts the same fault, reports "stack-overflow" and
+           terminates with its own exit code.
+       Only a normal exit means the guard failed. */
     if (WIFSIGNALED(status)) {
         CHECK(WTERMSIG(status) == SIGSEGV);
+    } else if (WIFEXITED(status)) {
+        CHECK(WEXITSTATUS(status) != 0);
+        CHECK(!(WEXITSTATUS(status) == 2) &&
+              "coroutine returned instead of faulting - guard page broken");
     } else {
-        CHECK(0 && "coroutine returned instead of faulting - guard page broken");
+        CHECK(0 && "child neither signalled nor exited");
     }
 }
 

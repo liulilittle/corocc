@@ -45,8 +45,26 @@ static void ctx_trampoline(coro_transfer t) {
        it into the resumer's ctx so the API invariant "swap fills from->fctx
        with the suspended frame" holds even for the very first swap. */
     cx->back->fctx = t.fctx;
+#if defined(COROCC_ASAN)
+    /* Finalize the switch the resumer opened before user code runs: an entry
+       function may swap again immediately, and ASan rejects a nested start.
+       The handle was stashed on this context right before that switch. */
+    __sanitizer_finish_switch_fiber(cx->asan_fake, NULL, NULL);
+#endif
     cx->entry(cx->arg);
     /* entry returned normally -> back to the resumer/sentinel. Never returns. */
+#if defined(COROCC_ASAN)
+    {
+        /* Leaving this fiber for good: announce the switch back to the
+           resumer's stack and hand the handle over, mirroring swap(). */
+        const coro_stack* rs = cx->back->stack;
+        void* fake = NULL;
+        __sanitizer_start_switch_fiber(&fake,
+                                       rs ? rs->lo : NULL,
+                                       rs ? rs->usable : 0);
+        cx->back->asan_fake = fake;
+    }
+#endif
     corocc_asm_jump(cx->back->fctx, NULL);
     __builtin_trap(); /* unreachable */
 }
@@ -67,29 +85,40 @@ int coro_ctx_init(coro_ctx* cx, const coro_stack* stk,
 
 void coro_ctx_swap(coro_ctx* from, coro_ctx* to) {
     if (!from || !to) return;
-    /* Remember the resumer so the trampoline can return to it. Pass `to` as
-       the first-jump data (delivered as transfer_t.data to the trampoline). */
+    /* Remember the resumer so the trampoline can return to it on entry-return.
+       Pass `to` as the first-jump data (delivered as transfer_t.data to the
+       trampoline). */
     to->back = from;
 #if defined(COROCC_ASAN)
     void* fake = NULL;
-    /* ASan needs to know the target stack so it can switch the fake stack.
-       A context without a stack (e.g. the main thread) has none to register. */
+    /* ASan needs to know the destination stack bounds so it can switch the
+       fake stack. A context without a stack (e.g. the main thread) has none
+       to register. The handle for the stack we are leaving is stashed on the
+       target so the code arriving there can finalize the switch. */
     __sanitizer_start_switch_fiber(
         &fake,
         to->stack ? to->stack->lo : NULL,
         to->stack ? to->stack->usable : 0);
-    {
-        coro_transfer tr = corocc_asm_jump(to->fctx, to);
-        from->fctx = tr.fctx;
-    }
-    {
-        const void* lo_from = from->stack ? from->stack->lo : NULL;
-        size_t      us_from = from->stack ? from->stack->usable : 0;
-        __sanitizer_finish_switch_fiber(fake, &lo_from, &us_from);
-    }
-#else
+    to->asan_fake = fake;
+#endif
     coro_transfer tr = corocc_asm_jump(to->fctx, to);
-    from->fctx = tr.fctx;
+    /* We are running again, so some context resumed us. tr.fctx is that
+       context's saved frame; it identified itself by storing itself in our
+       `back` slot immediately before jumping to us, so record the frame
+       there. Our own saved frame was handed to whoever we resume above and
+       must not be overwritten: a context object survives many swaps, and
+       clobbering the slot here would make the next jump land on a stale
+       frame. */
+    if (tr.data != NULL) {
+        from->back->fctx = tr.fctx;
+    }
+    /* tr.data == NULL: resumed by the entry-return sentinel, which passes no
+       resumee identity. The finished coroutine's frame is dead, and our own
+       frame was recorded at our first entry, so there is nothing to do. */
+#if defined(COROCC_ASAN)
+    /* We arrived here because another context switched into us: finalize the
+       switch that context opened, using the handle it left on us. */
+    __sanitizer_finish_switch_fiber(from->asan_fake, NULL, NULL);
 #endif
 }
 

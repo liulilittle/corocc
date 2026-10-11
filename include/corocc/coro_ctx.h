@@ -39,6 +39,10 @@ typedef struct coro_ctx {
     void            (*entry)(void*); /* PRIVATE: coroutine entry function. */
     void*             arg;    /* PRIVATE: opaque argument forwarded to entry. */
     coro_ctx*         back;   /* PRIVATE: resumer context (sentinel target). */
+    void*             asan_fake; /* PRIVATE: ASan fake-stack save handle handed
+                                    over at a switch into this context; only
+                                    meaningful when the implementation is built
+                                    with COROCC_ASAN, otherwise unused. */
 } coro_ctx;
 
 /**
