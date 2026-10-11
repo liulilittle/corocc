@@ -95,3 +95,12 @@ target_link_libraries(bench_switch PRIVATE corocc)
 # Coroutine lifecycle benchmark (round trip and create/destroy cost).
 add_executable(bench_coro perf/bench_coro.c)
 target_link_libraries(bench_coro PRIVATE corocc)
+
+# M3: the per-thread runtime as seen through the public API.
+add_executable(test_thread_smoke unit/test_thread_smoke.c)
+target_link_libraries(test_thread_smoke PRIVATE corocc)
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_thread_smoke PRIVATE Threads::Threads)
+endif()
+add_test(NAME thread_smoke COMMAND test_thread_smoke)

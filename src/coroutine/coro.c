@@ -38,6 +38,7 @@
 
 #include "arch/coro_atomic.h"
 #include "arch/coro_tls.h"
+#include "coroutine/coro_runtime.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -91,22 +92,28 @@ struct coro {
    library itself sets it around every drive, so no per-call plumbing is
    needed. User code must not depend on thread_local inside a coroutine
    (spec 5.5): this pointer is the library's own bookkeeping, not user state.
-   Its address is also this thread's identity, which is cheap and needs no
-   allocation. */
-static CORO_TLS coro_t* tls_current;
-
-/* Identity of the thread that may drive a coroutine (see coro_drive). */
-static void* coro_thread_id(void) {
-    return (void*)&tls_current;
+   It lives in the per-thread runtime together with the thread's driver
+   context and identity. */
+static coro_t* coro_current(void) {
+    return coro_runtime_current()->current;
 }
 
-/* Context of the thread's own code. Used as the `from` side when a coroutine
-   parked for the main flow is resumed; zero-initialized by TLS semantics, and
-   coro_ctx_swap fills its frame pointer on the first switch. */
-static CORO_TLS coro_ctx tls_driver;
+static void coro_set_current(coro_t* c) {
+    coro_runtime_current()->current = c;
+}
 
-static coro_t* coro_current(void) {
-    return tls_current;
+/* Identity of the thread that may drive a coroutine (see coro_drive). It is
+   the numeric identity the runtime assigned to this thread: comparing numbers
+   cannot dangle the way a pointer into thread storage would. */
+static uint64_t coro_thread_id(void) {
+    return coro_runtime_current()->id;
+}
+
+/* Context of the thread's own code, used as the `from` side when this thread's
+   flow resumes a coroutine. coro_ctx_swap fills its frame pointer on the first
+   switch, so a zeroed context is a valid starting state. */
+static coro_ctx* coro_driver_ctx(void) {
+    return &coro_runtime_current()->driver;
 }
 
 /* Entry frame: runs the user function on the coroutine's stack and returns to
@@ -239,22 +246,22 @@ coro_status coro_local_set(coro_t* c, size_t key, void* val) {
    that thread has exited, corrupts memory. Delivering or migrating the
    coroutine to another thread is the runtime milestone's job. */
 static coro_status coro_drive(coro_t* c, uint64_t claimed, coro_token* next) {
-    void* me = coro_thread_id();
+    uint64_t me = coro_thread_id();
     uint64_t owner = coro_at_load(&c->owner);
     if (owner == 0) {
-        coro_at_store(&c->owner, (uint64_t)(uintptr_t)me);
-    } else if (owner != (uint64_t)(uintptr_t)me) {
+        coro_at_store(&c->owner, me);
+    } else if (owner != me) {
         uint64_t give = CORO_W_RUNNING;
         (void)coro_at_cas(&c->w, &give, claimed); /* credential goes back */
         return CORO_EBUSY;
     }
 
-    coro_t* prev = tls_current;
-    coro_ctx* from = prev ? &prev->self : &tls_driver;
+    coro_t* prev = coro_current();
+    coro_ctx* from = prev ? &prev->self : coro_driver_ctx();
     c->resumer = from;
-    tls_current = c;
+    coro_set_current(c);
     coro_ctx_swap(from, &c->self);
-    tls_current = prev;
+    coro_set_current(prev);
 
     /* Settle: the coroutine is fully saved now, so publishing is safe. */
     if (c->finished) {
