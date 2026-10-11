@@ -27,6 +27,16 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(COROCC_ASAN)
+/* ASan fiber-switching hooks (see sanitizer/common_interface_defs.h). Declared
+   here to keep the public headers free of any sanitizer dependency. */
+void __sanitizer_start_switch_fiber(void** fake_stack_save,
+                                    const void* bottom, size_t size);
+void __sanitizer_finish_switch_fiber(void* fake_stack_save,
+                                     const void** bottom_old,
+                                     size_t* size_old);
+#endif
+
 /* Entry trampoline: runs the user entry function; when it returns, switches
    to the sentinel (resumer) context. Never reaches Boost's `_exit`. */
 static void ctx_trampoline(coro_transfer t) {
@@ -60,8 +70,27 @@ void coro_ctx_swap(coro_ctx* from, coro_ctx* to) {
     /* Remember the resumer so the trampoline can return to it. Pass `to` as
        the first-jump data (delivered as transfer_t.data to the trampoline). */
     to->back = from;
+#if defined(COROCC_ASAN)
+    void* fake = NULL;
+    /* ASan needs to know the target stack so it can switch the fake stack.
+       A context without a stack (e.g. the main thread) has none to register. */
+    __sanitizer_start_switch_fiber(
+        &fake,
+        to->stack ? to->stack->lo : NULL,
+        to->stack ? to->stack->usable : 0);
+    {
+        coro_transfer tr = corocc_asm_jump(to->fctx, to);
+        from->fctx = tr.fctx;
+    }
+    {
+        const void* lo_from = from->stack ? from->stack->lo : NULL;
+        size_t      us_from = from->stack ? from->stack->usable : 0;
+        __sanitizer_finish_switch_fiber(fake, &lo_from, &us_from);
+    }
+#else
     coro_transfer tr = corocc_asm_jump(to->fctx, to);
     from->fctx = tr.fctx;
+#endif
 }
 
 void coro_ctx_destroy(coro_ctx* cx) {

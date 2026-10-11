@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(corocc C ASM)
 
 option(COROCC_BUILD_TESTS "Build tests" ON)
+option(COROCC_ASAN "Build with AddressSanitizer (fiber-switch hooks)" OFF)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -10,6 +11,12 @@ if (MSVC)
     add_compile_options(/W4 /WX)
 else()
     add_compile_options(-Wall -Wextra -Werror)
+endif()
+
+if (COROCC_ASAN)
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+    add_compile_definitions(COROCC_ASAN=1)
 endif()
 
 add_library(corocc STATIC
