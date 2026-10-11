@@ -134,6 +134,41 @@ times. Returning from the entry function hands control back to the context
 that last swapped into it — never to a process exit. Headers compile as both
 C99 and C++11 and pull in no third-party headers.
 
+## Using the L1 coroutine object
+
+```c
+#include <corocc/coro.h>
+
+static coro_t* g_worker;
+
+static void worker(void* arg) {
+    for (int i = 0; i < 4; ++i) {
+        /* ... */
+        coro_yield();          /* park here, hand control back to the caller */
+    }
+    /* returning ends the coroutine */
+}
+
+int main(void) {
+    coro_token tok = CORO_TOKEN_NONE, next = CORO_TOKEN_NONE;
+    coro_create(&g_worker, NULL, worker, NULL);
+    coro_start(g_worker, &tok);          /* run until the first suspension */
+    while (next != CORO_TOKEN_DEAD) {
+        coro_resume(g_worker, tok, &next);   /* needs the token it published */
+        tok = next;
+    }
+    coro_destroy(g_worker);
+    return 0;
+}
+```
+
+Every suspension point publishes a unique token: presenting it is what wakes a
+coroutine, a stale token is rejected, and no scheduler is required. Cancellation
+is cooperative (`coro_cancel`), values that must survive suspension live in
+coroutine-local slots (`coro_local_get/set`), and a coroutine belongs to the
+thread that first drove it. The full contract, the state-word encoding and the
+measured costs are documented in [docs/api/coro.md](docs/api/coro.md).
+
 ## Known limitations
 
 - **Scope:** only the L0 layer ships today. Coroutine objects with the token

@@ -91,3 +91,7 @@ endif()
 # asserting one, so it is excluded from ctest.
 add_executable(bench_switch perf/bench_switch.c)
 target_link_libraries(bench_switch PRIVATE corocc)
+
+# Coroutine lifecycle benchmark (round trip and create/destroy cost).
+add_executable(bench_coro perf/bench_coro.c)
+target_link_libraries(bench_coro PRIVATE corocc)

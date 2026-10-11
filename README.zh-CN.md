@@ -128,6 +128,39 @@ int main(void) {
 最后一次切入它的上下文,绝不退出进程。公共头同时可作为 C99 与 C++11 编译,
 且不包含任何第三方头。
 
+## L1 协程对象用法
+
+```c
+#include <corocc/coro.h>
+
+static coro_t* g_worker;
+
+static void worker(void* arg) {
+    for (int i = 0; i < 4; ++i) {
+        /* ... */
+        coro_yield();          /* 在此挂起,把控制权交还调用方 */
+    }
+    /* 返回即结束协程 */
+}
+
+int main(void) {
+    coro_token tok = CORO_TOKEN_NONE, next = CORO_TOKEN_NONE;
+    coro_create(&g_worker, NULL, worker, NULL);
+    coro_start(g_worker, &tok);              /* 运行到第一个挂点 */
+    while (next != CORO_TOKEN_DEAD) {
+        coro_resume(g_worker, tok, &next);   /* 须出示它发布的凭证 */
+        tok = next;
+    }
+    coro_destroy(g_worker);
+    return 0;
+}
+```
+
+每个挂点都发布唯一 token:出示它才能唤醒协程,旧 token 一律拒绝,且无需任何调度
+器。取消是协作式的(`coro_cancel`),需要跨挂起存活的值应放在协程局部槽
+(`coro_local_get/set`),协程归属于首个驱动它的线程。完整契约、状态字编码与实测
+成本见 [docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md)。
+
 ## 已知限制
 
 - **范围:**目前只交付 L0 层。协程对象与 token 凭证协议、带工作窃取的
