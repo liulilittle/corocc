@@ -1,7 +1,7 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * coro_ctx.h -- opaque execution context: a stack plus a saved register frame.
+ * coro_ctx.h -- execution context: a stack plus a saved register frame.
  *
  * A coro_ctx binds a coroutine entry function and its argument to a
  * coro_stack. Switching between two contexts saves the callee-saved
@@ -23,13 +23,18 @@ extern "C" {
 #endif
 
 /**
- * coro_ctx -- opaque execution context.
+ * coro_ctx -- a complete execution context (fields are private).
  *
  * Holds the machine state required to resume a coroutine: its stack and a
- * saved register frame. The concrete layout is private to the library.
- * Callers must not access or copy the fields directly.
+ * saved register frame. The type is complete so callers may embed it by
+ * value (on the stack or in a pool) with no heap allocation. The fields are
+ * an implementation detail and PRIVATE: never read or write them directly.
+ * The layout is part of the documented ABI.
  */
-typedef struct coro_ctx coro_ctx;
+typedef struct coro_ctx {
+    void*             fctx;   /* PRIVATE: saved register frame (backend-internal). */
+    const coro_stack* stack;  /* PRIVATE: borrowed stack range (ASan hooks etc.). */
+} coro_ctx;
 
 /**
  * coro_ctx_init -- build an entry frame on a stack.

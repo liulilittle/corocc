@@ -1,16 +1,19 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * coro_stack.h -- opaque guarded stack type and its lifetime/query API.
+ * coro_stack.h -- guarded stack type and its lifetime/query API.
  *
  * A coro_stack owns a contiguous region of memory with a hardware guard
  * page at its low address end. Because stacks grow downward on every
  * supported ABI, an overflow writes past the usable region into the guard
  * page and faults instead of silently corrupting neighbouring memory.
  *
- * The type is opaque: callers must treat it as storage only and must not
- * inspect its fields. The full definition lives in the private header
- * src/coroutine/internal.h and is shared only with the implementation.
+ * The type is complete so that callers may embed it by value (on the stack
+ * or inside a pool) without a heap allocation, exactly as with pthread
+ * primitives. Its fields are an implementation detail: callers must treat
+ * them as private and must never read or write them directly -- use the API.
+ * The layout is part of the documented ABI and may change only together
+ * with an ABI version bump.
  *
  * This header includes no Boost (or other third-party) header and compiles
  * as both C99 and C++11.
@@ -26,17 +29,23 @@ extern "C" {
 #endif
 
 /**
- * coro_stack -- an opaque, guard-page-protected coroutine stack.
+ * coro_stack -- a guard-page-protected coroutine stack (complete type).
  *
  * Callers allocate a coro_stack on the stack or in static storage, pass
  * its address to coro_stack_alloc, and query it with coro_stack_size /
- * coro_stack_avail. The struct layout is private; do not access fields.
+ * coro_stack_avail. The fields below are private: do not access them.
  *
  * Lifetime: after a successful coro_stack_alloc the object must be released
  * exactly once with coro_stack_free. Freeing an already-freed or
  * zero-initialized object is a safe no-op.
  */
-typedef struct coro_stack coro_stack;
+typedef struct coro_stack {
+    void  *base;        /**< Private: lowest address of the mapped region (the guard page). */
+    size_t total;       /**< Private: total mapped bytes (guard page + usable). */
+    void  *lo;          /**< Private: lowest usable address (base + guard size). */
+    size_t usable;      /**< Private: usable stack bytes (excluding the guard page). */
+    size_t guard_bytes; /**< Private: size of the guard page, in bytes. */
+} coro_stack;
 
 /**
  * coro_stack_alloc -- allocate and protect a stack region.
