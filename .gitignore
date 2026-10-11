@@ -1,0 +1,8 @@
+build/
+build-*/
+.superpowers/
+.opencode/node_modules/
+.opencode/backups/
+*.obj
+*.o
+*.a
