@@ -45,6 +45,31 @@ add_executable(test_coro_cancel unit/test_coro_cancel.c)
 target_link_libraries(test_coro_cancel PRIVATE corocc)
 add_test(NAME coro_cancel COMMAND test_coro_cancel)
 
+# M2 safety suites: exactly-once under concurrency, failure without side
+# effects, the zero-spin probe (probe counter only with COROCC_PROBE_NOSPIN)
+# and a deterministic stress run.
+add_executable(test_coro_exactlyonce unit/test_coro_exactlyonce.c)
+target_link_libraries(test_coro_exactlyonce PRIVATE corocc)
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_coro_exactlyonce PRIVATE Threads::Threads)
+endif()
+add_test(NAME coro_exactlyonce COMMAND test_coro_exactlyonce)
+
+add_executable(test_coro_rights unit/test_coro_rights.c)
+target_link_libraries(test_coro_rights PRIVATE corocc)
+add_test(NAME coro_rights COMMAND test_coro_rights)
+
+add_executable(test_coro_stress unit/test_coro_stress.c)
+target_link_libraries(test_coro_stress PRIVATE corocc)
+add_test(NAME coro_stress COMMAND test_coro_stress)
+
+if (COROCC_PROBE_NOSPIN)
+    add_executable(test_coro_nospin unit/test_coro_nospin.c)
+    target_link_libraries(test_coro_nospin PRIVATE corocc)
+    add_test(NAME coro_nospin COMMAND test_coro_nospin)
+endif()
+
 # Coexistence with the real Boost.Context in one binary (proves the symbol
 # renaming took effect). Registered only for native builds: cross builds
 # would link the host's Boost objects into a foreign-arch binary, and a cross

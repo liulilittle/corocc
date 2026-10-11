@@ -192,10 +192,17 @@ COROCC_API coro_state coro_get_state(const coro_t* c);
  *              Only written on success.
  * @return CORO_OK on success;
  *         CORO_EINVAL if c or next is NULL;
- *         CORO_EBUSY if the coroutine is running or mid-switch on some thread;
+ *         CORO_EBUSY if the coroutine is running or mid-switch on some thread,
+ *         or if it belongs to another thread (see below);
  *         CORO_ESTALE if it was already started and parked (resume it with the
  *         token you were given instead of starting it again);
  *         CORO_EDESTROYED if it is already dead.
+ *
+ * Thread ownership: the thread that first starts a coroutine owns it, and
+ * only the owner may drive it. A start from any other thread is refused with
+ * CORO_EBUSY instead of switching into a context that belongs to a thread
+ * the library does not control. Delivering a coroutine to another thread
+ * ships with the runtime layer.
  */
 COROCC_API coro_status coro_start(coro_t* c, coro_token* next);
 
@@ -224,8 +231,8 @@ COROCC_API coro_status coro_start(coro_t* c, coro_token* next);
  *         already published, i.e. the coroutine has finished;
  *         CORO_ESTALE if tok is not the live credential (stale or never
  *         issued);
- *         CORO_EBUSY if the coroutine is running or mid-switch;
- *         CORO_EDESTROYED if its state word says it is dead.
+ *         CORO_EBUSY if the coroutine is running or mid-switch, or if it
+ *         belongs to another thread (see coro_start).
  */
 COROCC_API coro_status coro_resume(coro_t* c, coro_token tok,
                                    coro_token* next);

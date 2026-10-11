@@ -42,6 +42,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef COROCC_PROBE_NOSPIN
+/* Counter of every compare-and-swap the library performs, used by the
+   zero-spin test to prove a control path makes exactly one attempt. */
+unsigned long coro_probe_cas_count = 0;
+#endif
+
 /* Reserved values of W. Everything below CORO_W_TOKEN_BASE is a state tag;
    everything at or above it is a valid token. */
 #define CORO_W_NEW        ((uint64_t)0)
@@ -62,6 +68,10 @@ struct coro {
     coro_ctx    self;     /**< Owned execution context. */
     coro_ctx*   resumer;  /**< Context that drove the current run: yield and
                                entry-return target. NULL while not running. */
+    uint64_t    owner;     /**< Thread identity allowed to drive this coroutine
+                               in M2: NULL until the first drive. Cross-thread
+                               driving (delivery or migration) is a later
+                               milestone and is refused, never attempted. */
     uint64_t    cancel_req; /**< Set once a cancellation was requested; read at
                                 safe points, never part of W. */
     void*       local[CORO_LOCAL_SLOTS]; /**< Coroutine-local slots: live on the
@@ -80,8 +90,15 @@ struct coro {
    own code runs. It is what makes coro_yield and nested resume work: the
    library itself sets it around every drive, so no per-call plumbing is
    needed. User code must not depend on thread_local inside a coroutine
-   (spec 5.5): this pointer is the library's own bookkeeping, not user state. */
+   (spec 5.5): this pointer is the library's own bookkeeping, not user state.
+   Its address is also this thread's identity, which is cheap and needs no
+   allocation. */
 static CORO_TLS coro_t* tls_current;
+
+/* Identity of the thread that may drive a coroutine (see coro_drive). */
+static void* coro_thread_id(void) {
+    return (void*)&tls_current;
+}
 
 /* Context of the thread's own code. Used as the `from` side when a coroutine
    parked for the main flow is resumed; zero-initialized by TLS semantics, and
@@ -213,8 +230,25 @@ coro_status coro_local_set(coro_t* c, size_t key, void* val) {
 /* Drive a coroutine after its claim succeeded: record the resumer, switch to
    it, then settle. `prev` is the coroutine that was running on this thread
    (NULL for the thread's own code); the driver context supplies `from` in
-   that case. */
-static coro_status coro_drive(coro_t* c, coro_token* next) {
+   that case.
+ *
+ * Owner rule (milestone M2): the coroutine is driven from the thread that
+ * first drove it. A drive from any other thread is refused with CORO_EBUSY --
+ * and the credential is handed back so the owner can still drive it --
+   because the alternative, switching to a suspended thread's context after
+   that thread has exited, corrupts memory. Delivering or migrating the
+   coroutine to another thread is the runtime milestone's job. */
+static coro_status coro_drive(coro_t* c, uint64_t claimed, coro_token* next) {
+    void* me = coro_thread_id();
+    uint64_t owner = coro_at_load(&c->owner);
+    if (owner == 0) {
+        coro_at_store(&c->owner, (uint64_t)(uintptr_t)me);
+    } else if (owner != (uint64_t)(uintptr_t)me) {
+        uint64_t give = CORO_W_RUNNING;
+        (void)coro_at_cas(&c->w, &give, claimed); /* credential goes back */
+        return CORO_EBUSY;
+    }
+
     coro_t* prev = tls_current;
     coro_ctx* from = prev ? &prev->self : &tls_driver;
     c->resumer = from;
@@ -244,7 +278,7 @@ coro_status coro_start(coro_t* c, coro_token* next) {
     if (!coro_at_cas(&c->w, &exp, CORO_W_RUNNING)) {
         return claim_failure(coro_at_load(&c->w));
     }
-    return coro_drive(c, next);
+    return coro_drive(c, CORO_W_NEW, next);
 }
 
 coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
@@ -260,7 +294,7 @@ coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
     if (!coro_at_cas(&c->w, &exp, CORO_W_RUNNING)) {
         return claim_failure(coro_at_load(&c->w));
     }
-    return coro_drive(c, next);
+    return coro_drive(c, (uint64_t)tok, next);
 }
 
 /* Observe a pending cancellation, consuming it. A cancellation is seen at a

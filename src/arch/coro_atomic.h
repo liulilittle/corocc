@@ -20,6 +20,14 @@
  */
 #include <stdint.h>
 
+/* Zero-spin verification hook. With COROCC_PROBE_NOSPIN defined, every
+   compare-and-swap this header performs is counted in a global, so a test can
+   prove that a control path performs exactly one CAS (no retry loop). The
+   counter is defined by the library (coro.c) and read by tests. */
+#ifdef COROCC_PROBE_NOSPIN
+extern unsigned long coro_probe_cas_count;
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 
 /* GCC and Clang: __atomic builtins map onto the target's lock-free atomics
@@ -38,6 +46,9 @@ static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
    re-read the state without spinning. */
 static inline int coro_at_cas(volatile uint64_t* p, uint64_t* expected,
                               uint64_t desired) {
+#ifdef COROCC_PROBE_NOSPIN
+    ++coro_probe_cas_count;
+#endif
     return __atomic_compare_exchange_n(p, expected, desired, 0,
                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
