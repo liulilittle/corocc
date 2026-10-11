@@ -32,6 +32,11 @@ add_executable(test_ctx_asan unit/test_ctx_asan.c)
 target_link_libraries(test_ctx_asan PRIVATE corocc)
 add_test(NAME ctx_asan COMMAND test_ctx_asan)
 
+# M2: coroutine object (L1)
+add_executable(test_coro_smoke unit/test_coro_smoke.c)
+target_link_libraries(test_coro_smoke PRIVATE corocc)
+add_test(NAME coro_smoke COMMAND test_coro_smoke)
+
 # Coexistence with the real Boost.Context in one binary (proves the symbol
 # renaming took effect). Registered only for native builds: cross builds
 # would link the host's Boost objects into a foreign-arch binary, and a cross
