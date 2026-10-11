@@ -1,0 +1,50 @@
+name: release
+
+# Publishes prebuilt static libraries so users can download and use the
+# library with no build step (see the "Prebuilt artifacts" section of
+# README.md).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  prebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install cross toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qemu-user \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: prebuild every supported triple
+        run: bash scripts/prebuild-all.sh
+
+      - name: package per-triple archives
+        run: |
+          mkdir -p archives
+          for d in dist/*/; do
+            name="$(basename "$d")"
+            tar -C dist -czf "archives/corocc-$name-linux.tar.gz" "$name"
+          done
+          ls -la archives
+
+      - name: attach archives to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" archives/*.tar.gz --clobber
+          else
+            gh release create "$tag" archives/*.tar.gz \
+              --title "corocc $tag" --generate-notes
+          fi
+          gh release view "$tag" --json assets --jq '.assets[].name'

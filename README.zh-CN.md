@@ -83,6 +83,23 @@ Linux CI 主机上的参考值:x86_64 原生(GCC、Ninja)约 **10-11 ns/切换**
 aarch64 在 `qemu-aarch64` 用户态模拟下约 **50-60 ns/切换**(含模拟开销,
 该数值随主机负载波动)。
 
+## 预构建产物(零构建引入)
+
+每个 tag 都由 GitHub Actions(`.github/workflows/release.yml`)构建,把预编译
+好的静态库与公共头一起打成按三元组分包的归档,挂到该 tag 的 GitHub Release
+上,例如 `corocc-x86_64-unknown-linux-gnu-linux.tar.gz`。
+
+```sh
+tar xzf corocc-aarch64-unknown-linux-gnu-linux.tar.gz
+cc your_app.c \
+    -Iaarch64-unknown-linux-gnu/include \
+    aarch64-unknown-linux-gnu/lib/libcorocc.a
+```
+
+无需 configure、无需构建:下载后把编译器指向归档内的 `include` 与 `lib` 即可。
+已发布三元组随"具备 vendored 上下文切换后端的架构"增长;当前状态矩阵见
+`scripts/README.md`,`scripts/prebuild-all.sh` 可在本地生成同构布局。
+
 ## L0 API 用法
 
 ```c

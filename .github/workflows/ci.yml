@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Native build and test with the default toolchain. ubuntu-latest ships
+  # gcc, clang, cmake and ninja.
+  native-gcc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build + test + benchmark
+        run: bash scripts/build.sh
+
+  native-clang:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: build + test with clang
+        run: bash scripts/build.sh
+
+  # Every cross target: builds and qemu-tests the vendored backends and
+  # validates the remaining toolchain files (see scripts/README.md).
+  cross-isa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cross toolchains and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            qemu-user \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf gcc-arm-linux-gnueabi \
+            gcc-mips-linux-gnu gcc-mipsel-linux-gnu \
+            gcc-powerpc-linux-gnu gcc-powerpc64-linux-gnu gcc-powerpc64le-linux-gnu \
+            gcc-s390x-linux-gnu gcc-riscv64-linux-gnu
+      - name: build + qemu-test every cross target
+        run: bash scripts/build-all.sh
+
+  header-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: public headers under -pedantic-errors (C89/C99/C11, C++98/11/17)
+        run: bash .github/scripts/header-conformance.sh
+
+  prebuild-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cross toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qemu-user \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: stage dist/<triple> and verify drop-in consumption
+        run: |
+          bash scripts/prebuild-all.sh
+          ls -R dist | head -40
+
+  # Staged rollouts. These hosts need a context-switch backend that lands in
+  # milestone M9: the PE/MASM backend for MSVC and MinGW, and Mach-O for
+  # macOS. They are expected to fail at configure today, hence
+  # continue-on-error; once the backend lands they become hard gates.
+  pending-msvc:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure (needs the PE backend, milestone M9)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+  pending-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure (needs the Mach-O backend, milestone M9)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

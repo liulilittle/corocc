@@ -85,6 +85,26 @@ Linux CI host: about **10-11 ns/switch** natively on x86_64 (GCC, Ninja), and
 about **50-60 ns/switch** for aarch64 under `qemu-aarch64` user-mode emulation
 (emulation overhead included; the figure moves with host load).
 
+## Prebuilt artifacts (zero-build consumption)
+
+Every tag is built by GitHub Actions (`.github/workflows/release.yml`), which
+packs the precompiled static library together with the public headers into
+per-triple archives attached to the GitHub Release, for example
+`corocc-x86_64-unknown-linux-gnu-linux.tar.gz`.
+
+```sh
+tar xzf corocc-aarch64-unknown-linux-gnu-linux.tar.gz
+cc your_app.c \
+    -Iaarch64-unknown-linux-gnu/include \
+    aarch64-unknown-linux-gnu/lib/libcorocc.a
+```
+
+No configure or build step is needed: download, point the compiler at the
+bundled `include` and `lib`, done. The set of published triples grows with the
+architectures that have a vendored context-switch backend; `scripts/README.md`
+carries the current status matrix, and `scripts/prebuild-all.sh` produces the
+same layout locally.
+
 ## Using the L0 API
 
 ```c
