@@ -5,3 +5,7 @@ add_test(NAME smoke COMMAND test_smoke)
 add_executable(test_stack unit/test_stack.c)
 target_link_libraries(test_stack PRIVATE corocc)
 add_test(NAME stack COMMAND test_stack)
+
+add_executable(test_ctx unit/test_ctx.c)
+target_link_libraries(test_ctx PRIVATE corocc)
+add_test(NAME ctx COMMAND test_ctx)
