@@ -13,6 +13,7 @@ else()
 endif()
 
 add_library(corocc STATIC
+    src/coroutine/status.c
     src/coroutine/stack.c
     src/coroutine/ctx.c)
 target_include_directories(corocc PUBLIC include)
