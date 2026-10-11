@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(corocc C ASM)
+project(corocc C CXX ASM)
 
 option(COROCC_BUILD_TESTS "Build tests" ON)
 option(COROCC_ASAN "Build with AddressSanitizer (fiber-switch hooks)" OFF)
