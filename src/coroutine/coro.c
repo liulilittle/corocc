@@ -62,6 +62,10 @@ struct coro {
     coro_ctx    self;     /**< Owned execution context. */
     coro_ctx*   resumer;  /**< Context that drove the current run: yield and
                                entry-return target. NULL while not running. */
+    uint64_t    cancel_req; /**< Set once a cancellation was requested; read at
+                                safe points, never part of W. */
+    void*       local[CORO_LOCAL_SLOTS]; /**< Coroutine-local slots: live on the
+                                             coroutine, so they move with it. */
     coro_attr_t attr;     /**< Attribute snapshot for diagnostics. */
 };
 
@@ -175,6 +179,37 @@ coro_state coro_get_state(const coro_t* c) {
     return CORO_SUSPENDED;
 }
 
+coro_status coro_cancel(coro_t* c) {
+    if (!c) return CORO_EINVAL;
+    /* A request, not a transition: the coroutine observes it at its next safe
+       point (the return from coro_yield). Nothing is preempted, no state is
+       moved, so this never races with a drive and never fails on a dead or
+       parked coroutine. */
+    coro_at_store(&c->cancel_req, 1);
+    return CORO_OK;
+}
+
+coro_status coro_join(coro_t* c) {
+    if (!c) return CORO_EINVAL;
+    /* Manual mode has no scheduler to park the caller in, and the zero-spin
+       contract forbids polling, so joining reports whether the coroutine is
+       already dead; the caller drives it to completion and joins afterwards.
+       A blocking join ships with the runtime layer. */
+    return coro_get_state(c) == CORO_DEAD ? CORO_OK : CORO_EAGAIN;
+}
+
+void* coro_local_get(const coro_t* c, size_t key) {
+    if (!c || key >= CORO_LOCAL_SLOTS) return NULL;
+    return c->local[key];
+}
+
+coro_status coro_local_set(coro_t* c, size_t key, void* val) {
+    if (!c) return CORO_EINVAL;
+    if (key >= CORO_LOCAL_SLOTS) return CORO_EINVAL;
+    c->local[key] = val;
+    return CORO_OK;
+}
+
 /* Drive a coroutine after its claim succeeded: record the resumer, switch to
    it, then settle. `prev` is the coroutine that was running on this thread
    (NULL for the thread's own code); the driver context supplies `from` in
@@ -228,9 +263,24 @@ coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
     return coro_drive(c, next);
 }
 
+/* Observe a pending cancellation, consuming it. A cancellation is seen at a
+   safe point -- before parking and after being resumed -- so a request that
+   arrives while the coroutine is running surfaces at the very next yield
+   instead of one round trip later. */
+static int take_cancellation(coro_t* c) {
+    if (coro_at_load(&c->cancel_req)) {
+        coro_at_store(&c->cancel_req, 0);
+        return 1;
+    }
+    return 0;
+}
+
 coro_status coro_yield(void) {
     coro_t* c = coro_current();
     if (!c) return CORO_ESTALE; /* called outside any coroutine */
+
+    /* Cancelled before we even park: the entry function must unwind now. */
+    if (take_cancellation(c)) return CORO_ECANCELED;
 
     /* One claim-and-switch: take the permission token, or report that we hold
        no right to yield. No switch happens on the failure path. */
@@ -246,6 +296,6 @@ coro_status coro_yield(void) {
 
     /* A cancellation requested while we were parked surfaces here, so the
        entry function can unwind and complete the coroutine. */
-    /* (cancel support arrives with the cancel/join task) */
+    if (take_cancellation(c)) return CORO_ECANCELED;
     return CORO_OK;
 }

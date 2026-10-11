@@ -250,6 +250,60 @@ COROCC_API coro_status coro_resume(coro_t* c, coro_token tok,
  */
 COROCC_API coro_status coro_yield(void);
 
+/**
+ * coro_cancel -- request that a coroutine stop at its next safe point.
+ *
+ * Cooperative: the request is recorded and observed by the coroutine when the
+ * next coro_yield returns, which then reports CORO_ECANCELED to the entry
+ * function so it can unwind. Nothing is preempted mid-execution and no state
+ * transition is forced, so a parked, new or already dead coroutine accepts the
+ * request without complaint; a coroutine that never yields never observes it.
+ *
+ * @param c  Handle to cancel, or NULL.
+ * @return CORO_OK on success; CORO_EINVAL if c is NULL.
+ */
+COROCC_API coro_status coro_cancel(coro_t* c);
+
+/**
+ * coro_join -- wait until a coroutine has finished.
+ *
+ * The coroutine must already be dead: without a runtime layer there is nothing
+ * to park the caller in, and this contract never spins waiting for one. Drive
+ * the coroutine to completion (its coro_start/coro_resume returns
+ * CORO_TOKEN_DEAD) and then join. A blocking join ships with the scheduler.
+ *
+ * @param c  Handle to wait for, or NULL.
+ * @return CORO_OK if the coroutine is dead; CORO_EAGAIN if it is still live;
+ *         CORO_EINVAL if c is NULL.
+ */
+COROCC_API coro_status coro_join(coro_t* c);
+
+/**
+ * coro_local_get -- read a coroutine-local slot.
+ *
+ * Local values live on the coroutine, not on the thread, so they survive
+ * thread migration and are invisible to thread_local. A slot that was never
+ * written reads NULL.
+ *
+ * @param c    Handle to read from.
+ * @param key  Slot index, must be < CORO_LOCAL_SLOTS.
+ * @return The stored value, or NULL for an unset slot or an invalid request.
+ */
+COROCC_API void* coro_local_get(const coro_t* c, size_t key);
+
+/**
+ * coro_local_set -- write a coroutine-local slot.
+ *
+ * May be called by anyone holding the handle, before, during or between runs;
+ * it never touches the coroutine's state word and never blocks it.
+ *
+ * @param c    Handle to write to.
+ * @param key  Slot index, must be < CORO_LOCAL_SLOTS.
+ * @param val  Value to store; NULL clears the slot.
+ * @return CORO_OK on success; CORO_EINVAL if c is NULL or key is out of range.
+ */
+COROCC_API coro_status coro_local_set(coro_t* c, size_t key, void* val);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

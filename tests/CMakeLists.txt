@@ -41,6 +41,10 @@ add_executable(test_coro_token unit/test_coro_token.c)
 target_link_libraries(test_coro_token PRIVATE corocc)
 add_test(NAME coro_token COMMAND test_coro_token)
 
+add_executable(test_coro_cancel unit/test_coro_cancel.c)
+target_link_libraries(test_coro_cancel PRIVATE corocc)
+add_test(NAME coro_cancel COMMAND test_coro_cancel)
+
 # Coexistence with the real Boost.Context in one binary (proves the symbol
 # renaming took effect). Registered only for native builds: cross builds
 # would link the host's Boost objects into a foreign-arch binary, and a cross
