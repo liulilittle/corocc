@@ -179,6 +179,77 @@ COROCC_API coro_status coro_destroy(coro_t* c);
  */
 COROCC_API coro_state coro_get_state(const coro_t* c);
 
+/**
+ * coro_start -- start a coroutine that has never run.
+ *
+ * Claims the coroutine (NEW -> RUNNING with a single compare-and-swap),
+ * transfers control to its entry function and waits for it to either park or
+ * finish. Equivalent to resuming the implicit "never started" credential.
+ *
+ * @param c     Handle to start.
+ * @param next  Receives the credential for the suspension point the coroutine
+ *              parked at, or CORO_TOKEN_DEAD if the entry function returned.
+ *              Only written on success.
+ * @return CORO_OK on success;
+ *         CORO_EINVAL if c or next is NULL;
+ *         CORO_EBUSY if the coroutine is running or mid-switch on some thread;
+ *         CORO_ESTALE if it was already started and parked (resume it with the
+ *         token you were given instead of starting it again);
+ *         CORO_EDESTROYED if it is already dead.
+ */
+COROCC_API coro_status coro_start(coro_t* c, coro_token* next);
+
+/**
+ * coro_resume -- resume a parked coroutine by presenting its credential.
+ *
+ * The only way to wake a coroutine: present the token that its previous
+ * suspension point published. A successful call claims the coroutine
+ * (token -> RUNNING), switches to it, and only publishes the next credential
+ * after the switch has fully saved the coroutine's frame, so no observer can
+ * see a half-stopped coroutine as parked.
+ *
+ * Exactly one holder of a token can claim it: after a successful resume the
+ * token is consumed. Presenting the same token twice, or an older one, fails
+ * with CORO_ESTALE and leaves the coroutine untouched.
+ *
+ * @param c     Handle to resume.
+ * @param tok   Credential obtained from the previous coro_start/coro_resume.
+ * @param next  Receives the credential of the next suspension point, or
+ *              CORO_TOKEN_DEAD if the entry function returned. Only written on
+ *              success.
+ * @return CORO_OK on success;
+ *         CORO_EINVAL if c or next is NULL, or tok is not a credential
+ *         (CORO_TOKEN_NONE or a reserved internal value);
+ *         CORO_EDESTROYED if tok is the CORO_TOKEN_DEAD sentinel the coroutine
+ *         already published, i.e. the coroutine has finished;
+ *         CORO_ESTALE if tok is not the live credential (stale or never
+ *         issued);
+ *         CORO_EBUSY if the coroutine is running or mid-switch;
+ *         CORO_EDESTROYED if its state word says it is dead.
+ */
+COROCC_API coro_status coro_resume(coro_t* c, coro_token tok,
+                                   coro_token* next);
+
+/**
+ * coro_yield -- park the running coroutine and return control to its resumer.
+ *
+ * Must be called from inside a coroutine. It gives up the coroutine's
+ * permission token, switches back to the context that resumed it, and returns
+ * when that context (or another holder of the credential it will publish)
+ * resumes the coroutine again.
+ *
+ * Yield is cooperative: a coroutine that never yields can never be cancelled,
+ * preempted or starve another thread of the processor.
+ *
+ * @return CORO_OK when the coroutine was resumed;
+ *         CORO_ECANCELED when it was resumed and a cancellation had been
+ *         requested in the meantime (the entry function should return);
+ *         CORO_EBUSY if the coroutine lost its permission token to a
+ *         concurrent actor, in which case no switch happened;
+ *         CORO_ESTALE if called outside any coroutine (nothing to yield).
+ */
+COROCC_API coro_status coro_yield(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
