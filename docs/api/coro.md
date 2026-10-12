@@ -161,10 +161,29 @@ these calls never block or fail on a live coroutine.
 ## Ownership
 
 The thread that first drives a coroutine owns it, and only the owner may drive
-it. A start or resume from another thread returns `CORO_EBUSY` and hands the
-credential back, because switching into a context that belongs to a thread the
-library does not control would corrupt memory. Delivering a coroutine to
-another thread (or migrating it) is the runtime milestone's job.
+it. A start or resume from another thread is *delivered*: the request is queued
+for the owner and the requesting thread waits for the result the owner recorded.
+Nothing switches stacks on the requesting thread, so no coroutine can ever be
+entered by a thread that does not belong to it, and no thread can be left
+holding a reference to another thread's stack.
+
+`coro_pump` sweeps the owner's queue and returns how many requests it served;
+`coro_pump_wait` sleeps until a request arrives and then sweeps. Both must be
+called from the owning thread, and both are safe to call at any time. A caller
+that must serve a known number of requests should count what both return,
+because one sweep can serve many requests at once.
+
+Delivering a wakeup to a coroutine whose owner has left fails with
+`CORO_EDESTROYED` rather than being lost: the owner's exit hook fails whatever
+is still queued, so the requesting thread is always released.
+
+### Migrating a coroutine to another thread
+
+Not provided in this milestone. The alternative to delivery is a *migration*:
+claim the coroutine, become its new owner and run it here. That needs the
+scheduler's work-stealing structures to keep the coroutine's state coherent
+across the move, so it arrives with the runtime milestone. `coro.h` documents
+this as a known gap rather than pretending the delivery path covers it.
 
 ## Thread safety summary
 
@@ -173,7 +192,9 @@ another thread (or migrating it) is the runtime milestone's job.
 | `coro_create` | Concurrent for distinct handles. |
 | `coro_destroy` | Any thread; refuses a running coroutine. |
 | `coro_get_state`, `coro_join`, `coro_cancel`, `coro_local_*` | Any thread holding the handle. |
-| `coro_start`, `coro_resume`, `coro_yield` | Owner thread only; concurrent claims are resolved by a single compare-and-swap. |
+| `coro_start`, `coro_resume` | Owner thread drives directly; a foreign thread's request is delivered to the owner and the caller waits for the result. Concurrent claims are resolved by a single compare-and-swap either way. |
+| `coro_yield` | Owner thread only; it transfers control back to its resumer. |
+| `coro_pump`, `coro_pump_wait` | Owner thread only; concurrent enqueues are serialised by the queue's lock. |
 
 ## Guarantees
 
@@ -207,3 +228,23 @@ and first-touching a 256 KiB guarded stack.
 | --- | --- |
 | resume + yield round trip (two switches, one claim, one publish) | ~56 ns |
 | create + start + drive to completion + destroy (256 KiB guarded stack) | ~9.5 µs |
+| context switch alone (L0, `bench_switch`) | ~11 ns |
+
+## Concurrency verification
+
+The concurrency suites live in `tests/concurrency/`:
+
+| Suite | What it proves | Runs under |
+| --- | --- | --- |
+| `test_conc_double_resume` | At most one execution flow enters a suspension point when several threads present one credential, over a fixed-seed 200-round delivery stress. | native, ASan, aarch64/QEMU |
+| `test_conc_runtime_tsan` | The delivery queue, identity registry and atomics are race-free, from several threads at once. | ThreadSanitizer (CI) |
+
+ThreadSanitizer cannot follow a stack switch performed by assembly, so the drive
+path is not instrumentable and the concurrency work is split into an
+instrumentable part and a behavioural part. The behavioural part -- exactly-once,
+rejection codes, a coroutine left drivable -- runs in every other job.
+
+The TSan job does not run on the project's WSL image (ThreadSanitizer itself
+aborts there, with a minimal pthread program failing identically), so it is
+verified by CI and recorded as not locally verified; `scripts/ci-local.sh` says
+so rather than claiming a pass.

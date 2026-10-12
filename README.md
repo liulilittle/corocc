@@ -169,6 +169,33 @@ coroutine-local slots (`coro_local_get/set`), and a coroutine belongs to the
 thread that first drove it. The full contract, the state-word encoding and the
 measured costs are documented in [docs/api/coro.md](docs/api/coro.md).
 
+## Multithreading
+
+A coroutine belongs to the thread that first drove it. A wakeup requested from
+any other thread is *delivered* to that owner: the request is queued and the
+requesting thread waits for the result the owner records, so no coroutine is
+ever entered by a thread that does not belong to it.
+
+```c
+/* thread A (the owner): parks in coro_pump_wait until work arrives */
+coro_pump_wait();          /* sleeps, then serves every queued request */
+
+/* thread B: asks for a wakeup -- delivered to A, and A runs it */
+coro_token next = CORO_TOKEN_NONE;
+coro_status s = coro_resume(worker, tok, &next);   /* waits for A's result */
+```
+
+`coro_pump` sweeps the queue without blocking (useful when the owner has its own
+work) and returns how many requests it served; `coro_pump_wait` sleeps first.
+Because one sweep can serve many requests, callers that must serve a fixed
+number should count what both return. A request queued for an owner that has
+left fails with `CORO_EDESTROYED` instead of being lost.
+
+Migrating a coroutine to another thread (rather than delivering to its owner)
+is not provided yet: it needs the scheduler's work-stealing structures and
+arrives with that milestone. See [docs/api/coro.md](docs/api/coro.md) for the
+full cross-thread contract and the concurrency test matrix.
+
 ## Known limitations
 
 - **Scope:** only the L0 layer ships today. Coroutine objects with the token

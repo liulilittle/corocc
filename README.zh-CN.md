@@ -161,6 +161,28 @@ int main(void) {
 (`coro_local_get/set`),协程归属于首个驱动它的线程。完整契约、状态字编码与实测
 成本见 [docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md)。
 
+## 多线程
+
+协程归属于首个驱动它的线程。任何其他线程发起的唤醒会被**投递**给该属主:请求入队,
+请求方阻塞等待属主记录的结果——因此协程绝不会被不属于它的线程进入。
+
+```c
+/* 线程 A(属主):停在 coro_pump_wait,直到有活可用 */
+coro_pump_wait();          /* 睡眠,然后服务全部已排队请求 */
+
+/* 线程 B:请求唤醒 —— 被投递给 A,由 A 执行 */
+coro_token next = CORO_TOKEN_NONE;
+coro_status s = coro_resume(worker, tok, &next);   /* 等待 A 的结果 */
+```
+
+`coro_pump` 以非阻塞方式清扫队列(属主自有工作时应使用),并返回服务了多少个请求;
+`coro_pump_wait` 先睡眠再清扫。由于一次清扫可能服务多个请求,需要服务固定数量请求的
+调用方应统计两者返回值。投递给已退出属主的请求会返回 `CORO_EDESTROYED` 而非丢失。
+
+把协程**迁移**到另一线程(而非投递给属主)尚未提供:它依赖调度器的工作窃取结构,
+随该里程碑交付。完整跨线程契约与并发测试矩阵见
+[docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md)。
+
 ## 已知限制
 
 - **范围:**目前只交付 L0 层。协程对象与 token 凭证协议、带工作窃取的
