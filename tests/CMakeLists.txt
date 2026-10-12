@@ -128,3 +128,9 @@ if (NOT WIN32)
     target_link_libraries(test_conc_runtime_tsan PRIVATE corocc Threads::Threads)
     add_test(NAME conc_runtime_tsan COMMAND test_conc_runtime_tsan)
 endif()
+
+# M4: the timer heap and the monotone clock.
+add_executable(test_timer unit/test_timer.c)
+target_include_directories(test_timer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(test_timer PRIVATE corocc)
+add_test(NAME timer COMMAND test_timer)
