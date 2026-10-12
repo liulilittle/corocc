@@ -31,7 +31,8 @@ add_library(corocc STATIC
     src/coroutine/ctx.c
     src/coroutine/coro.c
     src/coroutine/coro_runtime.c
-    src/platform/threads.c)
+    src/platform/threads.c
+    src/platform/wait.c)
 target_include_directories(corocc PUBLIC include)
 target_include_directories(corocc PRIVATE src)
 if (NOT MSVC)

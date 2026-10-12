@@ -1,26 +1,24 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Task 5, part 1: "exactly once" under concurrency.
+/* Milestone M2/M3 Task 5: "exactly once" under concurrency, now with the
+ * cross-thread path in play.
  *
- * The safety property the token protocol guarantees is mutual exclusion of
+ * The safety property the credential protocol guarantees is mutual exclusion of
  * drives: for one credential exactly one compare-and-swap can win, so at most
  * one execution flow enters a suspension point. Everything else -- a rejected
  * racer learning why it lost, a coroutine left consistent afterwards, a process
  * that does not crash -- follows from that.
  *
- * What milestone M2 deliberately does NOT provide is cross-thread driving:
- * a coroutine belongs to the thread that first drove it (see coro_start), so
- * the racer that wins a claim on a coroutine it does not own is refused with
- * CORO_EBUSY and hands the credential back. The winning claim is therefore the
- * assertion of interest, not which thread ends up holding the coroutine.
+ * A coroutine belongs to the thread that first drove it. A wakeup requested
+ * from any other thread is delivered to the owner's queue and handled inside
+ * coro_pump / coro_pump_wait, which is what the owner thread below runs while
+ * the racers post their requests.
  */
 
 #if defined(_WIN32)
-/* The Windows path needs the M3 thread abstraction; the contract itself is
-   platform independent and this file documents that gap loudly. */
 static void run_tests(void) {
-    CHECK(0 && "concurrent exactly-once suite: POSIX threads only in M2");
+    CHECK(0 && "concurrent exactly-once suite: POSIX threads only in M3");
 }
 TEST_MAIN()
 #else
@@ -31,14 +29,11 @@ TEST_MAIN()
 #define THREADS 8u
 #define ROUNDS 8
 
-/* One result slot per racer: the threads never share a counter, so the
-   aggregation after the joins is race-free by construction. */
-static coro_status g_rc[THREADS];
-static coro_token  g_out[THREADS];
-
-static coro_t*             g_c;
-static coro_token          g_tok;
-static pthread_barrier_t   g_barrier;
+static coro_t*           g_c;
+static coro_token        g_tok;
+static coro_status       g_rc[THREADS];
+static coro_token        g_out[THREADS];
+static pthread_barrier_t g_barrier;
 
 static void entry_park_each_round(void* arg) {
     (void)arg;
@@ -47,21 +42,33 @@ static void entry_park_each_round(void* arg) {
     }
 }
 
+/* A racer asks for a wakeup the way any foreign thread does: the request is
+   delivered to the owner, and the result comes back from the owner's pump. */
 static void* racer(void* pv) {
     long id = (long)pv;
-    coro_token out = CORO_TOKEN_NONE;
-    pthread_barrier_wait(&g_barrier); /* release all racers at once */
-    g_rc[id] = coro_resume(g_c, g_tok, &out);
-    g_out[id] = out;
+    pthread_barrier_wait(&g_barrier);
+    g_rc[id] = coro_resume(g_c, g_tok, &g_out[id]);
     return NULL;
 }
 
-/* Run THREADS racers at once; returns how many of them resumed the coroutine,
-   and reports the rejection codes through the first two output arrays. */
-static int race(pthread_t* th) {
+/* Runs in the owner thread: serve requests until every racer has been served
+   and nothing is queued, then join them all. */
+static int race_with_pump(pthread_t* th) {
     int success = 0;
+    int served = 0;
     for (unsigned i = 0; i < THREADS; ++i) {
         CHECK(pthread_create(&th[i], NULL, racer, (void*)(long)i) == 0);
+    }
+    /* One pump can serve many requests, so count everything served -- by the
+       sweep and by the blocking wait alike -- and stop when every racer has
+       been served. */
+    while (served < (int)THREADS) {
+        int n = (int)coro_pump();
+        if (n > 0) {
+            served += n;
+        } else {
+            served += (int)coro_pump_wait();
+        }
     }
     for (unsigned i = 0; i < THREADS; ++i) {
         pthread_join(th[i], NULL);
@@ -79,7 +86,9 @@ static int race(pthread_t* th) {
     return success;
 }
 
-/* Drive a live coroutine to completion from the owning thread. */
+/* Drive a live coroutine to completion from the owning thread. When one of the
+   racers won the claim, the credential it published is the live one; the
+   credential the owner handed out was consumed. */
 static void finish_coroutine(coro_t* c, coro_token tok) {
     coro_token next = CORO_TOKEN_NONE;
     int guard = 0;
@@ -105,36 +114,38 @@ static void run_tests(void) {
 
     memset(g_rc, 0, sizeof g_rc);
     memset(g_out, 0, sizeof g_out);
-    success = race(th);
+    success = race_with_pump(th);
     /* Mutual exclusion: at most one racer may hold the coroutine. Which
        rejection code the others see depends on when their claim landed, so
        membership -- not a count -- is what the contract pins down. */
     CHECK(success <= 1);
+    winner_tok = g_tok;
     if (success == 1) {
         for (unsigned i = 0; i < THREADS; ++i) {
             if (g_rc[i] == CORO_OK) winner_tok = g_out[i];
         }
         CHECK(winner_tok != CORO_TOKEN_NONE);
-        finish_coroutine(g_c, winner_tok);
-    } else {
-        /* every claim was refused as foreign, so the owner's credential was
-           handed back and is still live */
-        finish_coroutine(g_c, g_tok);
     }
+    finish_coroutine(g_c, winner_tok);
     CHECK(coro_get_state(g_c) == CORO_DEAD);
     CHECK(coro_destroy(g_c) == CORO_OK);
 
     /* ---------- a coroutine keeps its owner ---------- */
-    /* A coroutine belongs to the thread that first drove it: nobody else may
-       drive it, whatever the claim race decides. */
     CHECK(coro_create(&g_c, NULL, entry_park_each_round, NULL) == CORO_OK);
     CHECK(coro_start(g_c, &g_tok) == CORO_OK);
     memset(g_rc, 0, sizeof g_rc);
     memset(g_out, 0, sizeof g_out);
-    success = race(th);
-    CHECK(success == 0); /* foreign owners only: none of them may drive */
-    /* the owner's credential is untouched and still works */
-    finish_coroutine(g_c, g_tok);
+    success = race_with_pump(th);
+    /* the requests were served by the owner, but at most one of them may have
+       executed the coroutine's body */
+    CHECK(success <= 1);
+    winner_tok = g_tok;
+    if (success == 1) {
+        for (unsigned i = 0; i < THREADS; ++i) {
+            if (g_rc[i] == CORO_OK) winner_tok = g_out[i];
+        }
+    }
+    finish_coroutine(g_c, winner_tok);
     CHECK(coro_destroy(g_c) == CORO_OK);
 }
 

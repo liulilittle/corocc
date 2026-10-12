@@ -288,12 +288,10 @@ coro_status coro_start(coro_t* c, coro_token* next) {
     return coro_drive(c, CORO_W_NEW, next);
 }
 
-coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
-    if (!c || !next) return CORO_EINVAL;
-    /* Reserved values must never reach the claim: CORO_TOKEN_NONE is not a
-       credential at all, the state tags (RUNNING/SWITCHING) are internal, and
-       CORO_TOKEN_DEAD aliases the DEAD state word on purpose -- presenting it
-       would otherwise claim a finished coroutine as if it were parked. */
+/* Attempt one claim and drive, sharing the exact path the inline resume uses.
+   Returns the status of the drive attempt. */
+static coro_status coro_claim_and_drive(coro_t* c, coro_token tok,
+                                        coro_token* next) {
     if (tok == CORO_TOKEN_NONE || tok < CORO_W_TOKEN_BASE) return CORO_EINVAL;
     if (tok == CORO_TOKEN_DEAD) return CORO_EDESTROYED;
 
@@ -304,8 +302,70 @@ coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
     return coro_drive(c, (uint64_t)tok, next);
 }
 
-/* Observe a pending cancellation, consuming it. A cancellation is seen at a
-   safe point -- before parking and after being resumed -- so a request that
+/* Deliver a wakeup request to the coroutine's owner and wait until it has been
+   handled. The owner is a different thread, so the request travels through its
+   delivery queue; the caller sleeps on a completion signal (never spins) and
+   learns the outcome the owner recorded. */
+static coro_status coro_deliver_and_wait(coro_t* c, coro_token tok,
+                                         coro_token* next) {
+    uint64_t owner = coro_at_load(&c->owner);
+    if (owner == 0) {
+        /* Never driven: nobody owns it yet, so this thread becomes the owner. */
+        return coro_claim_and_drive(c, tok, next);
+    }
+    if (owner == coro_thread_id()) return coro_claim_and_drive(c, tok, next);
+
+    coro_runtime* target = coro_runtime_by_id(owner);
+    if (!target) return CORO_EDESTROYED; /* the owner thread is gone */
+
+    coro_wait signal;
+    if (coro_wait_init(&signal) != 0) return CORO_ENOMEM;
+
+    coro_delivery node;
+    node.coro = c;
+    node.tok = tok;
+    node.published = CORO_TOKEN_NONE;
+    node.done = 0;
+    node.status = CORO_OK;
+    node.signal = &signal;
+    /* The node lives on this stack until the owner has handled it, which the
+       blocking wait below guarantees. */
+    coro_runtime_enqueue(target, &node);
+    if (coro_wait_block(&signal) != 0) {
+        coro_wait_destroy(&signal);
+        return CORO_EAGAIN; /* interrupted wait; the owner may still serve it */
+    }
+    coro_wait_destroy(&signal);
+
+    if (node.status == CORO_OK) *next = node.published;
+    return node.status;
+}
+
+coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
+    if (!c || !next) return CORO_EINVAL;
+    return coro_deliver_and_wait(c, tok, next);
+}
+
+size_t coro_pump(void) {
+    size_t served = 0;
+    for (;;) {
+        coro_delivery* d = coro_runtime_pop(coro_runtime_current());
+        if (!d) return served;
+        d->published = CORO_TOKEN_NONE;
+        d->status = coro_claim_and_drive(d->coro, d->tok, &d->published);
+        d->done = 1;
+        if (d->signal) coro_wait_raise(d->signal);
+        ++served;
+    }
+}
+
+size_t coro_pump_wait(void) {
+    coro_runtime* r = coro_runtime_current();
+    coro_runtime_wait_work(r);
+    return coro_pump();
+}
+
+/* Observe a pending cancellation, consuming it. A cancellation is seen at a   safe point -- before parking and after being resumed -- so a request that
    arrives while the coroutine is running surfaces at the very next yield
    instead of one round trip later. */
 static int take_cancellation(coro_t* c) {

@@ -258,6 +258,42 @@ COROCC_API coro_status coro_resume(coro_t* c, coro_token tok,
 COROCC_API coro_status coro_yield(void);
 
 /**
+ * coro_pump -- run every wakeup request waiting in this thread's queue.
+ *
+ * A coroutine belongs to the thread that first drove it, so a wakeup requested
+ * from any other thread is queued for that owner instead of being executed
+ * here. The owner processes the queue inside coro_pump, at a point of its own
+ * choosing (a blocking wait, a scheduler tick, or simply between operations),
+ * which is what keeps exactly one execution flow entering any suspension point.
+ *
+ * Each queued request is claimed once, with the same compare-and-swap the
+ * inline resume uses, so a request that loses the claim is dropped as a
+ * rejected credential rather than driving the coroutine twice. A coroutine
+ * whose entry finishes during a pumped drive publishes CORO_TOKEN_DEAD.
+ *
+ * @return How many requests were served. 0 when the queue was empty.
+ */
+COROCC_API size_t coro_pump(void);
+
+/**
+ * coro_pump_wait -- sleep until a wakeup arrives, then run what is queued.
+ *
+ * The owning thread's blocking wait: it sleeps on a condition variable (never
+ * polls) and returns to its caller after draining every request that was
+ * waiting, exactly like coro_pump. Use it when a thread has nothing to do but
+ * serve coroutines; use coro_pump when the thread has its own work and only
+ * wants to sweep the queue.
+ *
+ * A caller that must serve a known number of requests should count what this
+ * returns as well, because one pumped batch can serve many requests at once.
+ *
+ * Must be called from the owning thread.
+ *
+ * @return How many requests were served by the drain that followed the wait.
+ */
+COROCC_API size_t coro_pump_wait(void);
+
+/**
  * coro_cancel -- request that a coroutine stop at its next safe point.
  *
  * Cooperative: the request is recorded and observed by the coroutine when the

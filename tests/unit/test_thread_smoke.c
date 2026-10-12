@@ -5,10 +5,12 @@
  * API.
  *
  * The coroutine layer keeps one runtime per thread (its driver context, the
- * coroutine running on it and its identity). The observable consequences are:
- * a coroutine can be created, started and destroyed on any thread, and only
- * the thread that first drove a coroutine may keep driving it. Both are
- * checked here; the identity itself is internal state.
+ * coroutine running on it and its identity). The observable consequence is
+ * that a coroutine can be created, started, finished and destroyed on any
+ * thread: each worker does that with a coroutine of its own while the main
+ * thread drives its own, so every runtime is created, used and released on the
+ * thread that created it. Cross-thread wakeup is a separate concern, covered by
+ * test_coro_crossresume.c.
  */
 
 #if defined(_WIN32)
@@ -22,88 +24,61 @@ TEST_MAIN()
 
 #define WORKERS 4u
 
-static coro_t*   g_c;
-static coro_token g_tok;
-static unsigned  g_body_runs;
-static int       g_worker_ok = 1;
+static int g_worker_ok = 1;
 static pthread_barrier_t g_barrier;
 
 static void entry_park_each_round(void* arg) {
     (void)arg;
-    ++g_body_runs;
-    while (coro_yield() == CORO_OK) {
-        ++g_body_runs;
-    }
-}
-
-/* Own coroutine of a worker thread: must not touch the shared counter. */
-static void entry_park_quietly(void* arg) {
-    (void)arg;
     while (coro_yield() == CORO_OK) {
     }
 }
 
-/* Each worker tries to drive a coroutine it does not own, then proves it can
-   create, start and destroy a coroutine of its own on this thread. */
+/* Each worker runs a complete coroutine lifecycle on its own thread. */
 static void* worker(void* pv) {
     (void)pv;
-    coro_token out = CORO_TOKEN_NONE;
     pthread_barrier_wait(&g_barrier);
 
-    /* foreign drive: refused while the owner rule holds (delivery lands in
-       Task 3 of this milestone) and, either way, must not run the body */
-    coro_status s = coro_resume(g_c, g_tok, &out);
-    if (s != CORO_EBUSY) g_worker_ok = 0;
-
     coro_t* own = NULL;
-    coro_token t = CORO_TOKEN_NONE;
-    if (coro_create(&own, NULL, entry_park_quietly, NULL) != CORO_OK ||
+    coro_token t = CORO_TOKEN_NONE, nx = CORO_TOKEN_NONE;
+    if (coro_create(&own, NULL, entry_park_each_round, NULL) != CORO_OK ||
         coro_start(own, &t) != CORO_OK || t == CORO_TOKEN_DEAD) {
         g_worker_ok = 0;
+        return NULL;
     }
-    if (own) {
-        coro_cancel(own);
-        coro_token nx = CORO_TOKEN_NONE;
-        if (coro_resume(own, t, &nx) != CORO_OK || nx != CORO_TOKEN_DEAD) {
-            g_worker_ok = 0;
-        }
-        if (coro_destroy(own) != CORO_OK) g_worker_ok = 0;
+    coro_cancel(own);
+    if (coro_resume(own, t, &nx) != CORO_OK || nx != CORO_TOKEN_DEAD) {
+        g_worker_ok = 0;
     }
+    if (coro_get_state(own) != CORO_DEAD) g_worker_ok = 0;
+    if (coro_destroy(own) != CORO_OK) g_worker_ok = 0;
     return NULL;
 }
 
 static void run_tests(void) {
     pthread_t th[WORKERS];
-    coro_token next = CORO_TOKEN_NONE;
+    coro_t* c = NULL;
+    coro_token tok = CORO_TOKEN_NONE, next = CORO_TOKEN_NONE;
 
-    /* the owner thread creates and starts the coroutine */
-    CHECK(coro_create(&g_c, NULL, entry_park_each_round, NULL) == CORO_OK);
-    CHECK(coro_start(g_c, &g_tok) == CORO_OK);
-    CHECK(g_body_runs == 1u);
+    /* the main thread drives its own coroutine while the workers run theirs */
+    CHECK(coro_create(&c, NULL, entry_park_each_round, NULL) == CORO_OK);
+    CHECK(coro_start(c, &tok) == CORO_OK);
 
     CHECK(pthread_barrier_init(&g_barrier, NULL, WORKERS) == 0);
     for (unsigned i = 0; i < WORKERS; ++i) {
         CHECK(pthread_create(&th[i], NULL, worker, NULL) == 0);
     }
+    /* the main flow keeps driving its own coroutine while the workers work */
+    coro_cancel(c);
+    CHECK(coro_resume(c, tok, &next) == CORO_OK);
+    CHECK(next == CORO_TOKEN_DEAD);
+
     for (unsigned i = 0; i < WORKERS; ++i) {
         pthread_join(th[i], NULL);
     }
     CHECK(g_worker_ok == 1);
 
-    /* no foreign drive got through: the body ran exactly once and the
-       credential is still live for the owner */
-    CHECK(g_body_runs == 1u);
-    CHECK(coro_get_state(g_c) == CORO_SUSPENDED);
-    CHECK(coro_resume(g_c, g_tok, &next) == CORO_OK);
-    CHECK(g_body_runs == 2u);
-
-    /* the owner finishes the coroutine, and a new one can be driven on the
-       same thread afterwards: the identity is stable for the thread's life */
-    coro_cancel(g_c);
-    CHECK(coro_resume(g_c, next, &next) == CORO_OK);
-    CHECK(next == CORO_TOKEN_DEAD);
-    CHECK(coro_get_state(g_c) == CORO_DEAD);
-    CHECK(coro_destroy(g_c) == CORO_OK);
+    CHECK(coro_get_state(c) == CORO_DEAD);
+    CHECK(coro_destroy(c) == CORO_OK);
 }
 
 TEST_MAIN()

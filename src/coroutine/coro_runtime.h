@@ -22,16 +22,37 @@
  */
 #include <stdint.h>
 
+#include <corocc/coro.h>
 #include <corocc/coro_ctx.h>
 #include "platform/threads.h"
+#include "platform/wait.h"
+
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
 
 typedef struct coro coro_t;
 
+/** coro_delivery -- one wakeup request handed to a coroutine's owner. */
+typedef struct coro_delivery {
+    struct coro_delivery* next; /**< PRIVATE: intrusive queue link. */
+    coro_t*              coro; /**< PRIVATE: coroutine to wake. */
+    coro_token           tok;  /**< PRIVATE: credential to present. */
+    coro_token           published; /**< PRIVATE: credential the owner produced. */
+    int                  done;      /**< PRIVATE: set once the owner handled it. */
+    coro_status          status;    /**< PRIVATE: result of the owner's attempt. */
+    struct coro_wait*    signal;    /**< PRIVATE: completion signal, may be NULL. */
+} coro_delivery;
+
 /** coro_runtime -- per-thread library state (fields are private). */
 typedef struct coro_runtime {
-    uint64_t   id;      /**< PRIVATE: monotone thread identity, unique for life. */
-    coro_ctx   driver;  /**< PRIVATE: context of this thread's own code. */
-    coro_t*    current; /**< PRIVATE: coroutine running here, NULL when none. */
+    uint64_t        id;      /**< PRIVATE: monotone thread identity, unique for life. */
+    coro_ctx        driver;  /**< PRIVATE: context of this thread's own code. */
+    coro_t*         current; /**< PRIVATE: coroutine running here, NULL when none. */
+    coro_delivery*  head;    /**< PRIVATE: first pending delivery, NULL when empty. */
+    coro_delivery*  tail;    /**< PRIVATE: last pending delivery, NULL when empty. */
+    pthread_mutex_t lock;    /**< PRIVATE: guards the queue, never held across a switch. */
+    coro_wait       work;    /**< PRIVATE: raised whenever a delivery is queued. */
 } coro_runtime;
 
 /**
@@ -42,6 +63,83 @@ typedef struct coro_runtime {
  *         than being recoverable.
  */
 coro_runtime* coro_runtime_current(void);
+
+/**
+ * coro_runtime_enqueue -- append a delivery to this thread's queue.
+ *
+ * Called by any thread that wants to wake a coroutine this thread owns. The
+ * node belongs to the caller: it must stay alive until the queue consumes it,
+ * which the caller guarantees by waiting for completion or by keeping it on
+ * its own stack while it blocks.
+ *
+ * Thread safety: safe to call concurrently with other enqueues to the same
+ * runtime; the queue has a single consumer, this thread.
+ *
+ * @param r    Runtime to enqueue into.
+ * @param node Delivery node to append; its coro and tok must already be set.
+ */
+void coro_runtime_enqueue(coro_runtime* r, coro_delivery* node);
+
+/**
+ * coro_runtime_pop -- take the oldest pending delivery, if any.
+ *
+ * Single-consumer only: the owning thread calls it. Returns NULL when the
+ * queue is empty.
+ *
+ * @param r  Runtime to drain.
+ * @return The oldest delivery, or NULL when there is nothing to do.
+ */
+coro_delivery* coro_runtime_pop(coro_runtime* r);
+
+/** coro_runtime_register -- record this runtime under its identity. */
+void coro_runtime_register(coro_runtime* r);
+
+/** coro_runtime_unregister -- remove this runtime from the registry. */
+void coro_runtime_unregister(coro_runtime* r);
+
+/**
+ * coro_runtime_wait_work -- sleep until a delivery is queued for this thread.
+ *
+ * The owner-side half of cross-thread wakeup: it sleeps instead of polling, and
+ * returns as soon as work is available (or immediately if work is already
+ * waiting). Reset-then-check ordering means a request that arrives at any point
+ * is observed.
+ *
+ * @param r  Runtime to wait on.
+ */
+void coro_runtime_wait_work(coro_runtime* r);
+
+/**
+ * coro_runtime_by_id -- the runtime of a thread, by identity.
+ *
+ * Used by the delivery path to find the queue of the thread that owns a
+ * coroutine. Returns NULL when that thread has no runtime (it never drove a
+ * coroutine) or has already left, which the caller reports as a delivery
+ * failure rather than a crash.
+ *
+ * @param id  Thread identity recorded in the coroutine's owner field.
+ * @return The runtime, or NULL.
+ */
+coro_runtime* coro_runtime_by_id(uint64_t id);
+
+/**
+ * coro_runtime_pending -- number of deliveries still queued for this thread.
+ *
+ * @param r  Runtime to inspect.
+ * @return How many wakeup requests the owner has not handled yet.
+ */
+size_t coro_runtime_pending(const coro_runtime* r);
+
+/**
+ * coro_runtime_drain -- remove every pending delivery and report them failed.
+ *
+ * Called when the owning thread leaves: a request nobody will serve must be
+ * completed with CORO_EDESTROYED so the thread waiting on it is released and
+ * nothing is left pointing at this runtime.
+ *
+ * @param r  Runtime to drain; may be NULL.
+ */
+void coro_runtime_drain(coro_runtime* r);
 
 /**
  * coro_runtime_thread_exit -- thread-exit hook registered by the runtime.
