@@ -42,3 +42,26 @@ if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
 else
     echo "cross toolchains not installed; skipped (see scripts/README.md)"
 fi
+
+echo
+echo "== concurrency suites (native + ASan) =="
+for t in test_conc_double_resume test_conc_runtime_tsan; do
+    for i in $(seq 1 3); do
+        timeout 60 "./build/tests/$t" >/dev/null 2>&1 || { echo "$t FAILED (native)"; exit 1; }
+    done
+    echo "  $t: native 3/3"
+done
+
+echo
+echo "== ThreadSanitizer =="
+# The concurrency suites have a TSan-visible half (the runtime's queue,
+# registry and atomics) and a behavioural half (drives through the assembly
+# switch). TSan cannot follow a stack switch performed by assembly, and on this
+# WSL image TSan aborts even a minimal pthread program with "unexpected memory
+# mapping", so the TSan job is verified by ci.yml on the GitHub runners and is
+# recorded as not-locally-verified here.
+if timeout 30 ./build-tsan/tests/test_conc_runtime_tsan >/dev/null 2>&1; then
+    echo "  TSan suite: PASS (this environment supports it)"
+else
+    echo "  TSan suite: NOT RUN locally (see the note above); ci.yml runs it"
+fi

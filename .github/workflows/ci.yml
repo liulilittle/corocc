@@ -56,6 +56,24 @@ jobs:
       - name: public headers under -pedantic-errors (C89/C99/C11, C++98/11/17)
         run: bash .github/scripts/header-conformance.sh
 
+  # ThreadSanitizer covers the runtime's own concurrency (delivery queue,
+  # identity registry, atomics). The drive path cannot be instrumented: TSan
+  # does not follow a stack switch performed by assembly, which is why the
+  # concurrency suites are split into a TSan-visible part and a behavioural
+  # part. The behavioural part runs in every other job.
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build with ThreadSanitizer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+          cmake -S . -B build-tsan -G Ninja -DCOROCC_TSAN=ON
+          cmake --build build-tsan
+      - name: run the TSan-visible concurrency suite
+        run: ctest --test-dir build-tsan -R conc_runtime_tsan --output-on-failure
+
   prebuild-artifacts:
     runs-on: ubuntu-latest
     steps:

@@ -113,3 +113,18 @@ if (NOT WIN32)
     target_link_libraries(test_coro_crossresume PRIVATE Threads::Threads)
 endif()
 add_test(NAME coro_crossresume COMMAND test_coro_crossresume)
+
+# M3 concurrency suites. Only registered when the platform provides POSIX
+# threads. The TSan-visible suite needs the internal headers, so it also gets
+# the source root on its include path.
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    add_executable(test_conc_double_resume concurrency/test_conc_double_resume.c)
+    target_link_libraries(test_conc_double_resume PRIVATE corocc Threads::Threads)
+    add_test(NAME conc_double_resume COMMAND test_conc_double_resume)
+
+    add_executable(test_conc_runtime_tsan concurrency/test_conc_runtime_tsan.c)
+    target_include_directories(test_conc_runtime_tsan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_conc_runtime_tsan PRIVATE corocc Threads::Threads)
+    add_test(NAME conc_runtime_tsan COMMAND test_conc_runtime_tsan)
+endif()
