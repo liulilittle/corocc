@@ -110,6 +110,14 @@ void coro_runtime_unregister(coro_runtime* r);
 void coro_runtime_wait_work(coro_runtime* r);
 
 /**
+ * coro_runtime_signal_work -- wake a thread waiting in coro_runtime_wait_work*.
+ *
+ * Used when the queue itself did not change but the work state did -- a
+ * cancelled sleep, for instance, whose deadline left the timer heap.
+ */
+void coro_runtime_signal_work(coro_runtime* r);
+
+/**
  * coro_runtime_wait_work_until -- sleep until a delivery is queued or a
  * deadline passes.
  *

@@ -164,6 +164,10 @@ void coro_runtime_wait_work(coro_runtime* r) {
     if (empty) coro_wait_block(&r->work);
 }
 
+void coro_runtime_signal_work(coro_runtime* r) {
+    if (r) coro_wait_raise(&r->work);
+}
+
 void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline) {
     if (!r) return;
     /* Reset first, then look: a signal raised before the reset is covered by

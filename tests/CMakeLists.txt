@@ -139,3 +139,7 @@ add_test(NAME timer COMMAND test_timer)
 add_executable(test_sched_spawn unit/test_sched_spawn.c)
 target_link_libraries(test_sched_spawn PRIVATE corocc)
 add_test(NAME sched_spawn COMMAND test_sched_spawn)
+
+add_executable(test_sched_sleep unit/test_sched_sleep.c)
+target_link_libraries(test_sched_sleep PRIVATE corocc)
+add_test(NAME sched_sleep COMMAND test_sched_sleep)

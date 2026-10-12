@@ -53,9 +53,9 @@ static void index_drop(coro_sched_t* s, sched_node* n) {
     }
 }
 
-coro_status coro_sched_spawn(coro_sched_t* s, const coro_attr_t* attr,
-                             coro_fn fn, void* arg) {
-    if (!s || !fn) return CORO_EINVAL;
+coro_status coro_sched_spawn_h(coro_sched_t* s, const coro_attr_t* attr,
+                               coro_fn fn, void* arg, coro_t** out) {
+    if (!s || !fn || !out) return CORO_EINVAL;
 
     sched_node* n = (sched_node*)calloc(1, sizeof *n);
     if (!n) return CORO_ENOMEM;
@@ -72,7 +72,14 @@ coro_status coro_sched_spawn(coro_sched_t* s, const coro_attr_t* attr,
     n->timer.deadline = 0;
     index_add(s, n);
     sched_enqueue(s, n);
+    *out = n->coro;
     return CORO_OK;
+}
+
+coro_status coro_sched_spawn(coro_sched_t* s, const coro_attr_t* attr,
+                             coro_fn fn, void* arg) {
+    coro_t* ignore = NULL;
+    return coro_sched_spawn_h(s, attr, fn, arg, &ignore);
 }
 
 void sched_enqueue(coro_sched_t* s, sched_node* n) {
@@ -106,12 +113,19 @@ coro_status sched_claim(sched_node* n, coro_token* next) {
 void sched_collect_expired(coro_sched_t* s) {
     uint64_t now = coro_monotonic_ns();
     for (;;) {
-        coro_timer_node* t = coro_timer_heap_top(&s->sleepers);
-        if (!t || t->deadline > now) return;
+        coro_timer_node* t;
+        sched_node* n;
+        pthread_mutex_lock(&s->timer_lock);
+        t = coro_timer_heap_top(&s->sleepers);
+        if (!t || t->deadline > now) {
+            pthread_mutex_unlock(&s->timer_lock);
+            return;
+        }
         t = coro_timer_heap_pop(&s->sleepers);
+        pthread_mutex_unlock(&s->timer_lock);
         /* the timer node is embedded in the bookkeeping node, so the address
            of the owning node is the timer's address minus that offset */
-        sched_node* n = (sched_node*)(void*)((char*)t - offsetof(sched_node, timer));
+        n = (sched_node*)(void*)((char*)t - offsetof(sched_node, timer));
         sched_enqueue(s, n); /* queue it, never jump to it */
     }
 }
@@ -119,6 +133,12 @@ void sched_collect_expired(coro_sched_t* s) {
 /* A node whose coroutine finished: release the wait chain and drop it. */
 static void retire_node(coro_sched_t* s, sched_node* n) {
     sched_node* waiter = n->waiter_next;
+    /* A finishing coroutine may still hold a deadline if it was cancelled
+       between the timer firing and its next drive; leaving it in the heap
+       would later hand the loop a pointer to this freed node. */
+    pthread_mutex_lock(&s->timer_lock);
+    (void)coro_timer_heap_remove(&s->sleepers, &n->timer);
+    pthread_mutex_unlock(&s->timer_lock);
     while (waiter) {
         sched_node* next = waiter->waiter_next;
         waiter->waiter_next = NULL;
@@ -132,15 +152,67 @@ static void retire_node(coro_sched_t* s, sched_node* n) {
     free(n);
 }
 
+coro_status sched_sleep(coro_sched_t* s, uint64_t deadline) {
+    sched_node* n = s ? s->running : NULL;
+    if (!n) return CORO_ESTALE; /* not inside a scheduler-run coroutine */
+    if (!s) return CORO_EINVAL;
+
+    n->timer.deadline = deadline;
+    /* A sleep is a wait, not a voluntary yield: the node stays off the run
+       queue until its deadline fires, so the loop must not requeue it the way
+       it requeues a plain yield. */
+    n->waiting = 1;
+    pthread_mutex_lock(&s->timer_lock);
+    coro_timer_heap_push(&s->sleepers, &n->timer);
+    pthread_mutex_unlock(&s->timer_lock);
+    return coro_yield();
+}
+
+void sched_wake(coro_sched_t* s, sched_node* n) {
+    int removed;
+    if (!s || !n) return;
+    pthread_mutex_lock(&s->timer_lock);
+    /* Removal refuses a node that is not in the heap, which is exactly the
+       state of a node whose deadline already fired. */
+    removed = (coro_timer_heap_remove(&s->sleepers, &n->timer) == 0);
+    if (removed) {
+        sched_enqueue(s, n);
+        /* The run loop may be sleeping until this deadline; the deadline is
+           gone, so wake the thread that runs the loop -- which is this
+           scheduler's thread, not necessarily the caller's. */
+        coro_runtime_signal_work(s->rt);
+    }
+    pthread_mutex_unlock(&s->timer_lock);
+}
+
+coro_status coro_sched_cancel(coro_sched_t* s, coro_t* c) {
+    if (!s || !c) return CORO_EINVAL;
+    sched_node* n = sched_node_of(c);
+    if (!n) return CORO_EINVAL;
+    /* The request lands where any other cancellation lands; the coroutine
+       observes it at its next safe point. If it is asleep, take its deadline
+       out of the heap and requeue it so that safe point comes now. */
+    coro_status st = coro_cancel(c);
+    if (st == CORO_OK) sched_wake(s, n);
+    return st;
+}
+
+coro_status coro_sched_sleep(coro_sched_t* s, uint64_t deadline) {
+    if (!s) return CORO_EINVAL;
+    return sched_sleep(s, deadline);
+}
+
 coro_sched_t* coro_sched_create(void) {
     coro_sched_t* s = (coro_sched_t*)calloc(1, sizeof *s);
     if (!s) return NULL;
+    pthread_mutex_init(&s->timer_lock, NULL);
     coro_timer_heap_init(&s->sleepers);
     return s;
 }
 
 coro_status coro_sched_run(coro_sched_t* s) {
     if (!s) return CORO_EINVAL;
+    s->rt = coro_runtime_current(); /* the thread that runs the loop */
 
     for (;;) {
         /* Cross-thread wakeups addressed to this thread are served here, which
@@ -152,7 +224,10 @@ coro_status coro_sched_run(coro_sched_t* s) {
         sched_node* n = runq_take(s);
         if (n) {
             coro_token next = CORO_TOKEN_NONE;
-            coro_status st = sched_claim(n, &next);
+            coro_status st;
+            s->running = n;
+            st = sched_claim(n, &next);
+            s->running = NULL;
             if (st == CORO_OK) {
                 if (next == CORO_TOKEN_DEAD) {
                     retire_node(s, n);
@@ -161,9 +236,10 @@ coro_status coro_sched_run(coro_sched_t* s) {
                        coroutine goes back to the tail of the run queue, which
                        makes the loop round-robin. Waiting -- sleeping on a
                        timer or joining another coroutine -- does NOT requeue;
-                       whatever was waited on re-enqueues it when it is ready. */
+                       whatever was waited on re-enqueues it when it is ready,
+                       which is what the waiting flag records. */
                     n->tok = next;
-                    sched_enqueue(s, n);
+                    if (!n->waiting) sched_enqueue(s, n);
                 }
             } else {
                 /* The claim was lost -- the coroutine was cancelled or driven
@@ -178,9 +254,12 @@ coro_status coro_sched_run(coro_sched_t* s) {
         /* Nothing runnable. A coroutine parked at a yield with no wakeup
            pending is idle by design, and a sleeping one has a deadline in the
            heap: sleep until the nearest deadline or a delivery, then sweep. */
-        coro_timer_node* t = coro_timer_heap_top(&s->sleepers);
+        coro_timer_node* t;
+        pthread_mutex_lock(&s->timer_lock);
+        t = coro_timer_heap_top(&s->sleepers);
+        pthread_mutex_unlock(&s->timer_lock);
         if (t) {
-            coro_runtime_wait_work_until(coro_runtime_current(), t->deadline);
+            coro_runtime_wait_work_until(s->rt, t->deadline);
             continue;
         }
         return CORO_OK;

@@ -17,6 +17,11 @@
 #include <stddef.h>
 
 #include <corocc/coro_sched.h>
+
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
+
 #include "coroutine/coro_runtime.h"
 #include "scheduler/timer.h"
 
@@ -28,15 +33,19 @@ typedef struct sched_node {
     struct sched_node* waiter_next; /**< wait chain: coroutines waiting on this one */
     int                done;        /**< the coroutine finished (join fast path) */
     int                started;     /**< its entry has been entered at least once */
+    int                waiting;     /**< parked on a deadline, not a plain yield */
 } sched_node;
 
 struct coro_sched {
     sched_node*  runq_head;   /**< runnable, in spawn order */
     sched_node*  runq_tail;
     coro_timer_heap sleepers; /**< deadlines of the sleeping nodes */
+    pthread_mutex_t timer_lock; /**< guards the heap; never held across a switch */
+    coro_runtime* rt;        /**< runtime of the thread that runs the loop */
     sched_node** index;       /**< every live node, for wait_all */
     size_t       index_count;
     size_t       index_cap;
+    sched_node*  running;     /**< node the loop is driving right now */
 };
 
 /** sched_node_of -- the bookkeeping node a coroutine carries. */
@@ -47,6 +56,12 @@ coro_status sched_claim(sched_node* n, coro_token* next);
 
 /** sched_enqueue -- make a parked node runnable again. */
 void sched_enqueue(coro_sched_t* s, sched_node* n);
+
+/** sched_sleep -- park the running node until its deadline (internal). */
+coro_status sched_sleep(coro_sched_t* s, uint64_t deadline);
+
+/** sched_wake -- remove a node's deadline and requeue it (cancellation). */
+void sched_wake(coro_sched_t* s, sched_node* n);
 
 /** sched_collect_expired -- move every node whose deadline has passed. */
 void sched_collect_expired(coro_sched_t* s);

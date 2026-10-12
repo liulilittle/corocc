@@ -85,6 +85,25 @@ COROCC_API coro_status coro_sched_spawn(coro_sched_t* s, const coro_attr_t* attr
 COROCC_API coro_status coro_sched_run(coro_sched_t* s);
 
 /**
+ * coro_sched_spawn_h -- create a coroutine, queue it, and report its handle.
+ *
+ * Same as coro_sched_spawn, plus the coroutine handle so the caller can query
+ * its state, cancel it or join it. The handle must not be destroyed by hand:
+ * the scheduler owns it and releases it when the coroutine finishes.
+ *
+ * @param s      Scheduler to queue on. Must not be NULL.
+ * @param attr   Attributes, or NULL for the defaults.
+ * @param fn     Entry point, called as fn(arg). Must not be NULL.
+ * @param arg    Opaque argument forwarded to fn.
+ * @param out    Receives the handle; must not be NULL.
+ * @return CORO_OK on success; CORO_EINVAL for a NULL scheduler, entry or out;
+ *         CORO_ENOMEM when the coroutine, its stack or the queue node could not
+ *         be allocated.
+ */
+COROCC_API coro_status coro_sched_spawn_h(coro_sched_t* s, const coro_attr_t* attr,
+                                          coro_fn fn, void* arg, coro_t** out);
+
+/**
  * coro_sched_pending -- how many coroutines this scheduler still owns.
  *
  * Counts runnable, sleeping and joined coroutines; zero means the scheduler is
@@ -94,6 +113,52 @@ COROCC_API coro_status coro_sched_run(coro_sched_t* s);
  * @return The live coroutine count, or 0 for NULL.
  */
 COROCC_API size_t coro_sched_pending(const coro_sched_t* s);
+
+/**
+ * coro_monotonic_ns -- current time from a monotone source.
+ *
+ * The clock the scheduler and its timers use. Only differences are meaningful.
+ *
+ * @return Nanoseconds from an unspecified epoch; never decreases within a
+ *         process.
+ */
+COROCC_API uint64_t coro_monotonic_ns(void);
+
+/**
+ * coro_sched_cancel -- ask a coroutine on this scheduler to stop.
+ *
+ * The coroutine observes the request at its next safe point, exactly as
+ * coro_cancel documents. If it is sleeping, its deadline is removed and it is
+ * requeued so that safe point is reached now instead of at the deadline.
+ *
+ * @param s  Scheduler that owns the coroutine.
+ * @param c  Coroutine to cancel.
+ * @return CORO_OK on success; CORO_EINVAL for a NULL argument or a coroutine
+ *         this scheduler does not own.
+ */
+COROCC_API coro_status coro_sched_cancel(coro_sched_t* s, coro_t* c);
+
+/**
+ * coro_sched_sleep -- park the running coroutine until a deadline passes.
+ *
+ * Must be called from inside a coroutine on this scheduler. The deadline is an
+ * absolute monotone timestamp, as coro_monotonic_ns reports; pass now + delta.
+ * The coroutine is off the run queue until its deadline, and it is requeued by
+ * the timer path -- never switched to directly -- so the run loop stays the only
+ * thread that drives it.
+ *
+ * Cancellation is observed the same way as anywhere else: if a cancellation is
+ * requested before the deadline, the deadline is removed and the coroutine is
+ * woken early, and the call returns CORO_ECANCELED.
+ *
+ * @param s         Scheduler the coroutine runs on.
+ * @param deadline  Absolute monotone nanoseconds.
+ * @return CORO_OK when the deadline passed;
+ *         CORO_ECANCELED when the sleep was cut short by a cancellation;
+ *         CORO_EINVAL for a NULL scheduler, or CORO_ESTALE when called outside
+ *         any coroutine.
+ */
+COROCC_API coro_status coro_sched_sleep(coro_sched_t* s, uint64_t deadline);
 
 #ifdef __cplusplus
 } /* extern "C" */
