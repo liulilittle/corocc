@@ -73,6 +73,8 @@ struct coro {
                                in M2: NULL until the first drive. Cross-thread
                                driving (delivery or migration) is a later
                                milestone and is refused, never attempted. */
+    void*       sched_tag; /**< Opaque back-pointer the scheduler layer stores on
+                               coroutines it owns; never read by this layer. */
     uint64_t    cancel_req; /**< Set once a cancellation was requested; read at
                                 safe points, never part of W. */
     void*       local[CORO_LOCAL_SLOTS]; /**< Coroutine-local slots: live on the
@@ -232,6 +234,16 @@ coro_status coro_local_set(coro_t* c, size_t key, void* val) {
     if (key >= CORO_LOCAL_SLOTS) return CORO_EINVAL;
     c->local[key] = val;
     return CORO_OK;
+}
+
+/* The owning layer's private slot; see coro_internal.h for why this door
+   exists instead of exposing the struct. */
+void coro_set_sched_tag(coro_t* c, void* tag) {
+    if (c) c->sched_tag = tag;
+}
+
+void* coro_get_sched_tag(const coro_t* c) {
+    return c ? c->sched_tag : NULL;
 }
 
 /* Drive a coroutine after its claim succeeded: record the resumer, switch to

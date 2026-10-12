@@ -164,6 +164,18 @@ void coro_runtime_wait_work(coro_runtime* r) {
     if (empty) coro_wait_block(&r->work);
 }
 
+void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline) {
+    if (!r) return;
+    /* Reset first, then look: a signal raised before the reset is covered by
+       the queue being non-empty, and one raised after the check still sets the
+       signal, so the wait cannot miss a request. */
+    coro_wait_reset(&r->work);
+    pthread_mutex_lock(&r->lock);
+    int empty = (q_load(&r->head) == NULL);
+    pthread_mutex_unlock(&r->lock);
+    if (empty) coro_wait_block_until(&r->work, deadline);
+}
+
 coro_runtime* coro_runtime_by_id(uint64_t id) {
     coro_runtime* found = NULL;
     pthread_mutex_lock(&g_reg_lock);

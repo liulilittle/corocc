@@ -38,6 +38,7 @@ add_library(corocc STATIC
     src/coroutine/coro.c
     src/coroutine/coro_runtime.c
     src/scheduler/timer.c
+    src/scheduler/sched.c
     src/platform/threads.c
     src/platform/wait.c)
 target_include_directories(corocc PUBLIC include)

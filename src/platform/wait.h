@@ -20,6 +20,7 @@
 #else
 
 #include <pthread.h>
+#include <stdint.h>
 
 typedef struct coro_wait {
     pthread_mutex_t lock;
@@ -39,6 +40,20 @@ int coro_wait_destroy(coro_wait* w);
  * @return 0 when the signal was observed, non-zero on a wait error.
  */
 int coro_wait_block(coro_wait* w);
+
+/**
+ * coro_wait_block_until -- sleep until the signal is raised or a deadline.
+ *
+ * The deadline is an absolute monotone timestamp, as coro_monotonic_ns
+ * reports, so the two agree on the scale. The condition variable is created
+ * against the monotone clock for exactly this reason.
+ *
+ * @param w         Signal to wait on.
+ * @param deadline  Absolute monotone nanoseconds.
+ * @return 0 when the signal was observed, non-zero on a timeout or a wait
+ *         error (the caller distinguishes them only if it needs to).
+ */
+int coro_wait_block_until(coro_wait* w, uint64_t deadline);
 
 /** coro_wait_raise -- mark the signal done and wake every waiter. */
 int coro_wait_raise(coro_wait* w);

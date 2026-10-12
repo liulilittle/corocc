@@ -110,6 +110,19 @@ void coro_runtime_unregister(coro_runtime* r);
 void coro_runtime_wait_work(coro_runtime* r);
 
 /**
+ * coro_runtime_wait_work_until -- sleep until a delivery is queued or a
+ * deadline passes.
+ *
+ * The scheduler's idle wait: it sleeps instead of polling, wakes as soon as
+ * work arrives, and wakes at the deadline so a timer can fire on time. Same
+ * reset-then-check ordering as coro_runtime_wait_work, so no wakeup is lost.
+ *
+ * @param r         Runtime to wait on.
+ * @param deadline  Absolute monotone nanoseconds, as coro_monotonic_ns reports.
+ */
+void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline);
+
+/**
  * coro_runtime_by_id -- the runtime of a thread, by identity.
  *
  * Used by the delivery path to find the queue of the thread that owns a
