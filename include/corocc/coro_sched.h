@@ -88,8 +88,9 @@ COROCC_API coro_status coro_sched_run(coro_sched_t* s);
  * coro_sched_spawn_h -- create a coroutine, queue it, and report its handle.
  *
  * Same as coro_sched_spawn, plus the coroutine handle so the caller can query
- * its state, cancel it or join it. The handle must not be destroyed by hand:
- * the scheduler owns it and releases it when the coroutine finishes.
+ * its state, cancel it or join it. The handle belongs to the scheduler: it must
+ * not be destroyed by hand, and it becomes invalid the moment the coroutine
+ * finishes and the scheduler releases it.
  *
  * @param s      Scheduler to queue on. Must not be NULL.
  * @param attr   Attributes, or NULL for the defaults.
@@ -123,6 +124,38 @@ COROCC_API size_t coro_sched_pending(const coro_sched_t* s);
  *         process.
  */
 COROCC_API uint64_t coro_monotonic_ns(void);
+
+/**
+ * coro_sched_join -- wait until a coroutine on this scheduler has finished.
+ *
+ * The blocking counterpart of coro_join: rather than reporting whether the
+ * coroutine is dead, it parks the caller on that coroutine's wait chain and
+ * returns when the coroutine ends. Because the caller is parked, the run loop
+ * keeps making progress -- that is the whole point of a scheduler.
+ *
+ * If several coroutines wait on one target they are all released, and each is
+ * resumed exactly once (the wait chain is unlinked by whoever runs first).
+ *
+ * @param s  Scheduler the target runs on. Must not be NULL.
+ * @param c  Coroutine to wait for. Must be owned by this scheduler.
+ * @return CORO_OK when the coroutine is dead;
+ *         CORO_EINVAL for a NULL argument or a coroutine this scheduler does
+ *         not own;
+ *         CORO_EDESTROYED when the coroutine already finished before the call.
+ */
+COROCC_API coro_status coro_sched_join(coro_sched_t* s, coro_t* c);
+
+/**
+ * coro_sched_wait_all -- run the loop until every coroutine it owns is dead.
+ *
+ * The convenience form of joining everything: it drives the scheduler until
+ * nothing is left, so a caller can spawn work and collect it without naming
+ * each handle. Equivalent to running coro_sched_run to completion.
+ *
+ * @param s  Scheduler to drain. Must not be NULL.
+ * @return CORO_OK on success; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_sched_wait_all(coro_sched_t* s);
 
 /**
  * coro_sched_cancel -- ask a coroutine on this scheduler to stop.

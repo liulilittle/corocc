@@ -139,17 +139,50 @@ static void retire_node(coro_sched_t* s, sched_node* n) {
     pthread_mutex_lock(&s->timer_lock);
     (void)coro_timer_heap_remove(&s->sleepers, &n->timer);
     pthread_mutex_unlock(&s->timer_lock);
+    /* Unlink the whole chain first: each waiter is resumed exactly once, no
+       matter how many of them were waiting. */
+    n->waiter_next = NULL;
     while (waiter) {
         sched_node* next = waiter->waiter_next;
         waiter->waiter_next = NULL;
-        sched_enqueue(s, waiter); /* wake: the join returns on its next turn */
+        waiter->waiting = 0; /* it is runnable again */
+        sched_enqueue(s, waiter);
         waiter = next;
     }
-    n->waiter_next = NULL;
     n->done = 1;
     index_drop(s, n);
     coro_destroy(n->coro);
     free(n);
+}
+
+/* Park the running node on a target's wait chain. */
+coro_status sched_join(coro_sched_t* s, sched_node* target) {
+    sched_node* self = s ? s->running : NULL;
+    if (!s || !target) return CORO_EINVAL;
+    if (!self) return CORO_ESTALE; /* not running on this scheduler */
+    if (target == self) return CORO_EINVAL; /* waiting on oneself deadlocks */
+
+    if (target->done) return CORO_EDESTROYED;
+
+    /* Link at the head; the retire path unlinks the whole chain. */
+    self->waiter_next = target->waiter_next;
+    target->waiter_next = self;
+    self->waiting = 1; /* a join is a wait, so no round-robin requeue */
+    return coro_yield();
+}
+
+coro_status coro_sched_join(coro_sched_t* s, coro_t* c) {
+    sched_node* target;
+    if (!s || !c) return CORO_EINVAL;
+    target = sched_node_of(c);
+    if (!target) return CORO_EINVAL;
+    /* A target that already finished reports that instead of parking. */
+    if (target->done) return CORO_EDESTROYED;
+    return sched_join(s, target);
+}
+
+coro_status coro_sched_wait_all(coro_sched_t* s) {
+    return coro_sched_run(s);
 }
 
 coro_status sched_sleep(coro_sched_t* s, uint64_t deadline) {

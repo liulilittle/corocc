@@ -143,3 +143,7 @@ add_test(NAME sched_spawn COMMAND test_sched_spawn)
 add_executable(test_sched_sleep unit/test_sched_sleep.c)
 target_link_libraries(test_sched_sleep PRIVATE corocc)
 add_test(NAME sched_sleep COMMAND test_sched_sleep)
+
+add_executable(test_sched_join unit/test_sched_join.c)
+target_link_libraries(test_sched_join PRIVATE corocc)
+add_test(NAME sched_join COMMAND test_sched_join)

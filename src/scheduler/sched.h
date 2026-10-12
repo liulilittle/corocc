@@ -60,6 +60,9 @@ void sched_enqueue(coro_sched_t* s, sched_node* n);
 /** sched_sleep -- park the running node until its deadline (internal). */
 coro_status sched_sleep(coro_sched_t* s, uint64_t deadline);
 
+/** sched_join -- park the running node on a target's wait chain. */
+coro_status sched_join(coro_sched_t* s, sched_node* target);
+
 /** sched_wake -- remove a node's deadline and requeue it (cancellation). */
 void sched_wake(coro_sched_t* s, sched_node* n);
 
