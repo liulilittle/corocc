@@ -104,3 +104,12 @@ if (NOT WIN32)
     target_link_libraries(test_thread_smoke PRIVATE Threads::Threads)
 endif()
 add_test(NAME thread_smoke COMMAND test_thread_smoke)
+
+# M3: cross-thread wakeup delivered to the owning thread.
+add_executable(test_coro_crossresume unit/test_coro_crossresume.c)
+target_link_libraries(test_coro_crossresume PRIVATE corocc)
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_coro_crossresume PRIVATE Threads::Threads)
+endif()
+add_test(NAME coro_crossresume COMMAND test_coro_crossresume)
