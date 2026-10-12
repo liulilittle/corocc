@@ -1,8 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2/M3 Task 5: "exactly once" under concurrency, now with the
- * cross-thread path in play.
+/* "Exactly once" under concurrency, manual mode (M2 contract, revisited).
  *
  * The safety property the credential protocol guarantees is mutual exclusion of
  * drives: for one credential exactly one compare-and-swap can win, so at most
@@ -10,10 +9,10 @@
  * racer learning why it lost, a coroutine left consistent afterwards, a process
  * that does not crash -- follows from that.
  *
- * A coroutine belongs to the thread that first drove it. A wakeup requested
- * from any other thread is delivered to the owner's queue and handled inside
- * coro_pump / coro_pump_wait, which is what the owner thread below runs while
- * the racers post their requests.
+ * Any thread may drive any coroutine: a racer that wins the claim switches into
+ * the coroutine on its own thread and publishes the next credential; the losers
+ * report a status code. No thread sits in a pump waiting for a delivery --
+ * manual resume drives directly.
  */
 
 #if defined(_WIN32)
@@ -42,8 +41,8 @@ static void entry_park_each_round(void* arg) {
     }
 }
 
-/* A racer asks for a wakeup the way any foreign thread does: the request is
-   delivered to the owner, and the result comes back from the owner's pump. */
+/* A racer presents the live credential and drives the coroutine on its own
+   thread; exactly one racer wins the claim. */
 static void* racer(void* pv) {
     long id = (long)pv;
     pthread_barrier_wait(&g_barrier);
@@ -51,24 +50,12 @@ static void* racer(void* pv) {
     return NULL;
 }
 
-/* Runs in the owner thread: serve requests until every racer has been served
-   and nothing is queued, then join them all. */
-static int race_with_pump(pthread_t* th) {
+/* Releases every racer against the same credential and joins them all; the
+   racers drive directly, so the main thread only joins. */
+static int race_each_round(pthread_t* th) {
     int success = 0;
-    int served = 0;
     for (unsigned i = 0; i < THREADS; ++i) {
         CHECK(pthread_create(&th[i], NULL, racer, (void*)(long)i) == 0);
-    }
-    /* One pump can serve many requests, so count everything served -- by the
-       sweep and by the blocking wait alike -- and stop when every racer has
-       been served. */
-    while (served < (int)THREADS) {
-        int n = (int)coro_pump();
-        if (n > 0) {
-            served += n;
-        } else {
-            served += (int)coro_pump_wait();
-        }
     }
     for (unsigned i = 0; i < THREADS; ++i) {
         pthread_join(th[i], NULL);
@@ -86,9 +73,8 @@ static int race_with_pump(pthread_t* th) {
     return success;
 }
 
-/* Drive a live coroutine to completion from the owning thread. When one of the
-   racers won the claim, the credential it published is the live one; the
-   credential the owner handed out was consumed. */
+/* Drive a live coroutine to completion from this thread. When one of the
+   racers won the claim, the credential it published is the live one. */
 static void finish_coroutine(coro_t* c, coro_token tok) {
     coro_token next = CORO_TOKEN_NONE;
     int guard = 0;
@@ -114,7 +100,7 @@ static void run_tests(void) {
 
     memset(g_rc, 0, sizeof g_rc);
     memset(g_out, 0, sizeof g_out);
-    success = race_with_pump(th);
+    success = race_each_round(th);
     /* Mutual exclusion: at most one racer may hold the coroutine. Which
        rejection code the others see depends on when their claim landed, so
        membership -- not a count -- is what the contract pins down. */
@@ -130,14 +116,12 @@ static void run_tests(void) {
     CHECK(coro_get_state(g_c) == CORO_DEAD);
     CHECK(coro_destroy(g_c) == CORO_OK);
 
-    /* ---------- a coroutine keeps its owner ---------- */
+    /* ---------- second coroutine, same guarantee ---------- */
     CHECK(coro_create(&g_c, NULL, entry_park_each_round, NULL) == CORO_OK);
     CHECK(coro_start(g_c, &g_tok) == CORO_OK);
     memset(g_rc, 0, sizeof g_rc);
     memset(g_out, 0, sizeof g_out);
-    success = race_with_pump(th);
-    /* the requests were served by the owner, but at most one of them may have
-       executed the coroutine's body */
+    success = race_each_round(th);
     CHECK(success <= 1);
     winner_tok = g_tok;
     if (success == 1) {

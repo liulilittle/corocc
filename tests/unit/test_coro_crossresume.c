@@ -1,13 +1,13 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M3 Task 3: cross-thread resume delivers to the owner.
+/* Manual-mode cross-thread resume: a coroutine may be driven by any thread.
  *
- * The behaviours that make the delivery path trustworthy:
- *   - a request from a foreign thread is served by the owner, and the foreign
- *     caller learns the credential the owner published;
- *   - the same credential presented by two threads at once executes the
- *     coroutine body exactly once;
+ * The behaviours that make cross-thread driving trustworthy:
+ *   - a foreign thread that presents the live credential drives the coroutine
+ *     right there on its own thread, and learns the published credential;
+ *   - the same credential presented by several threads at once executes the
+ *     coroutine body exactly once, every other caller gets a rejection;
  *   - a stale credential is refused and nothing runs;
  *   - a coroutine that already died reports that instead of waking anybody.
  */
@@ -24,8 +24,8 @@ TEST_MAIN()
 
 #define WAKERS 4u
 
-/* A gate the owner opens once every caller of a phase is running, so all the
-   requests of a phase are posted together. Waiting on it is a condition
+/* A gate that releases every caller of a phase together, so all the resumes
+   of a phase race for the same credential. Waiting on it is a condition
    variable, never a spin. */
 static pthread_mutex_t g_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_gate_cond = PTHREAD_COND_INITIALIZER;
@@ -44,7 +44,7 @@ static void entry_count_rounds(void* arg) {
     }
 }
 
-/* Asks for one wakeup, the way any foreign thread does. */
+/* Presents the live credential from this foreign thread and drives directly. */
 static void* waker(void* pv) {
     unsigned slot = (unsigned)(uintptr_t)pv;
     pthread_mutex_lock(&g_gate_lock);
@@ -56,11 +56,10 @@ static void* waker(void* pv) {
     return NULL;
 }
 
-/* Starts `count` foreign callers, releases them together, and serves their
-   requests from the owning thread. */
+/* Starts `count` foreign callers and releases them together; every caller
+   drives the coroutine on its own thread, so the main thread only joins. */
 static void run_wakers(unsigned count) {
     pthread_t t[WAKERS];
-    int served = 0;
     CHECK(count >= 1u && count <= WAKERS);
 
     pthread_mutex_lock(&g_gate_lock);
@@ -76,10 +75,6 @@ static void run_wakers(unsigned count) {
     pthread_cond_broadcast(&g_gate_cond);
     pthread_mutex_unlock(&g_gate_lock);
 
-    while (served < (int)count) {
-        int n = (int)coro_pump();
-        if (n > 0) served += n; else served += (int)coro_pump_wait();
-    }
     for (unsigned i = 0; i < count; ++i) {
         pthread_join(t[i], NULL);
     }
@@ -92,7 +87,7 @@ static void run_tests(void) {
     CHECK(coro_start(g_c, &g_live) == CORO_OK);
     CHECK(g_rounds == 0u);
 
-    /* ---------- a foreign wakeup is served by the owner ---------- */
+    /* ---------- a foreign thread drives and publishes ---------- */
     run_wakers(1);
     CHECK(g_wrc[0] == CORO_OK);
     CHECK(g_wout[0] != CORO_TOKEN_NONE);
@@ -101,7 +96,7 @@ static void run_tests(void) {
     CHECK(coro_get_state(g_c) == CORO_SUSPENDED);
     g_live = g_wout[0];    /* the credential the foreign caller learned */
 
-    /* ---------- the owner keeps driving inline ---------- */
+    /* ---------- the main thread keeps driving inline ---------- */
     CHECK(coro_resume(g_c, g_live, &next) == CORO_OK);
     CHECK(g_rounds == 2u);
     g_live = next;

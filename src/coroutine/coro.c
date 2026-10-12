@@ -69,10 +69,6 @@ struct coro {
     coro_ctx    self;     /**< Owned execution context. */
     coro_ctx*   resumer;  /**< Context that drove the current run: yield and
                                entry-return target. NULL while not running. */
-    uint64_t    owner;     /**< Thread identity allowed to drive this coroutine
-                               in M2: NULL until the first drive. Cross-thread
-                               driving (delivery or migration) is a later
-                               milestone and is refused, never attempted. */
     void*       sched_tag; /**< Opaque back-pointer the scheduler layer stores on
                                coroutines it owns; never read by this layer. */
     uint64_t    cancel_req; /**< Set once a cancellation was requested; read at
@@ -102,13 +98,6 @@ static coro_t* coro_current(void) {
 
 static void coro_set_current(coro_t* c) {
     coro_runtime_current()->current = c;
-}
-
-/* Identity of the thread that may drive a coroutine (see coro_drive). It is
-   the numeric identity the runtime assigned to this thread: comparing numbers
-   cannot dangle the way a pointer into thread storage would. */
-static uint64_t coro_thread_id(void) {
-    return coro_runtime_current()->id;
 }
 
 /* Context of the thread's own code, used as the `from` side when this thread's
@@ -251,23 +240,13 @@ void* coro_get_sched_tag(const coro_t* c) {
    (NULL for the thread's own code); the driver context supplies `from` in
    that case.
  *
- * Owner rule (milestone M2): the coroutine is driven from the thread that
- * first drove it. A drive from any other thread is refused with CORO_EBUSY --
- * and the credential is handed back so the owner can still drive it --
-   because the alternative, switching to a suspended thread's context after
-   that thread has exited, corrupts memory. Delivering or migrating the
-   coroutine to another thread is the runtime milestone's job. */
-static coro_status coro_drive(coro_t* c, uint64_t claimed, coro_token* next) {
-    uint64_t me = coro_thread_id();
-    uint64_t owner = coro_at_load(&c->owner);
-    if (owner == 0) {
-        coro_at_store(&c->owner, me);
-    } else if (owner != me) {
-        uint64_t give = CORO_W_RUNNING;
-        (void)coro_at_cas(&c->w, &give, claimed); /* credential goes back */
-        return CORO_EBUSY;
-    }
-
+ * Any thread may drive any coroutine: the claim (a single compare-and-swap on
+   the state word) is what keeps exactly one execution flow inside the
+   coroutine, and `from` is always the *calling* thread's own context, so a
+   coroutine yields back to whichever thread last drove it. The owner field is
+   gone by design -- migration between threads is a first-class feature, not a
+   refusal. */
+static coro_status coro_drive(coro_t* c, coro_token* next) {
     coro_t* prev = coro_current();
     coro_ctx* from = prev ? &prev->self : coro_driver_ctx();
     c->resumer = from;
@@ -297,7 +276,7 @@ coro_status coro_start(coro_t* c, coro_token* next) {
     if (!coro_at_cas(&c->w, &exp, CORO_W_RUNNING)) {
         return claim_failure(coro_at_load(&c->w));
     }
-    return coro_drive(c, CORO_W_NEW, next);
+    return coro_drive(c, next);
 }
 
 /* Attempt one claim and drive, sharing the exact path the inline resume uses.
@@ -311,51 +290,16 @@ static coro_status coro_claim_and_drive(coro_t* c, coro_token tok,
     if (!coro_at_cas(&c->w, &exp, CORO_W_RUNNING)) {
         return claim_failure(coro_at_load(&c->w));
     }
-    return coro_drive(c, (uint64_t)tok, next);
-}
-
-/* Deliver a wakeup request to the coroutine's owner and wait until it has been
-   handled. The owner is a different thread, so the request travels through its
-   delivery queue; the caller sleeps on a completion signal (never spins) and
-   learns the outcome the owner recorded. */
-static coro_status coro_deliver_and_wait(coro_t* c, coro_token tok,
-                                         coro_token* next) {
-    uint64_t owner = coro_at_load(&c->owner);
-    if (owner == 0) {
-        /* Never driven: nobody owns it yet, so this thread becomes the owner. */
-        return coro_claim_and_drive(c, tok, next);
-    }
-    if (owner == coro_thread_id()) return coro_claim_and_drive(c, tok, next);
-
-    coro_runtime* target = coro_runtime_by_id(owner);
-    if (!target) return CORO_EDESTROYED; /* the owner thread is gone */
-
-    coro_wait signal;
-    if (coro_wait_init(&signal) != 0) return CORO_ENOMEM;
-
-    coro_delivery node;
-    node.coro = c;
-    node.tok = tok;
-    node.published = CORO_TOKEN_NONE;
-    node.done = 0;
-    node.status = CORO_OK;
-    node.signal = &signal;
-    /* The node lives on this stack until the owner has handled it, which the
-       blocking wait below guarantees. */
-    coro_runtime_enqueue(target, &node);
-    if (coro_wait_block(&signal) != 0) {
-        coro_wait_destroy(&signal);
-        return CORO_EAGAIN; /* interrupted wait; the owner may still serve it */
-    }
-    coro_wait_destroy(&signal);
-
-    if (node.status == CORO_OK) *next = node.published;
-    return node.status;
+    return coro_drive(c, next);
 }
 
 coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next) {
     if (!c || !next) return CORO_EINVAL;
-    return coro_deliver_and_wait(c, tok, next);
+    /* Manual-mode resume: claim the credential and drive the coroutine right
+       here, on this thread, no matter which thread drove it last. Exactly one
+       driver wins the claim, so concurrent resumes from several threads are
+       safe: losers report a status code and the coroutine is untouched. */
+    return coro_claim_and_drive(c, tok, next);
 }
 
 size_t coro_pump(void) {
