@@ -59,6 +59,46 @@ static inline uint64_t coro_at_fetch_add(volatile uint64_t* p, uint64_t v) {
     return __atomic_fetch_add(p, v, __ATOMIC_RELAXED);
 }
 
+/* Read-and-swap: returns the previous value and stores `v`. The swap is fully
+   ordered (ACQ_REL), which is what the MPSC queue needs to drain a batch. */
+static inline uint64_t coro_at_exchange(volatile uint64_t* p, uint64_t v) {
+    return __atomic_exchange_n(p, v, __ATOMIC_ACQ_REL);
+}
+
+/* Bitwise-OR, relaxed: used for status flags where a stale reader only needs
+   to notice the bit latched. */
+static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
+    return __atomic_fetch_or(p, v, __ATOMIC_RELAXED);
+}
+
+/* Bitwise-AND, relaxed: the mirror of coro_at_or for clearing flags. */
+static inline uint64_t coro_at_and(volatile uint64_t* p, uint64_t v) {
+    return __atomic_fetch_and(p, v, __ATOMIC_RELAXED);
+}
+
+/* Full memory barrier. The Chase-Lev deque needs it twice: the owner orders
+   its bottom store before the top load (pop), the thief orders its top load
+   before the bottom load (steal). Without these, on TSO the single-element
+   race can let both sides take the last node. */
+static inline void coro_at_fence(void) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+
+/* Retry loop for lock-free queues: returns the value the location held after
+   the winning attempt. Bounded by the caller; only the queue layer may loop. */
+static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
+                                        uint64_t expected, uint64_t desired) {
+    for (;;) {
+#ifdef COROCC_PROBE_NOSPIN
+        ++coro_probe_cas_count;
+#endif
+        if (__atomic_compare_exchange_n(p, &expected, desired, 0,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            return expected;
+        }
+    }
+}
+
 #elif defined(_MSC_VER)
 
 #include <intrin.h>
@@ -86,6 +126,34 @@ static inline int coro_at_cas(volatile uint64_t* p, uint64_t* expected,
 static inline uint64_t coro_at_fetch_add(volatile uint64_t* p, uint64_t v) {
     return (uint64_t)_InterlockedExchangeAdd64((volatile long long*)p,
                                                (long long)v);
+}
+
+static inline uint64_t coro_at_exchange(volatile uint64_t* p, uint64_t v) {
+    return (uint64_t)_InterlockedExchange64((volatile long long*)p,
+                                            (long long)v);
+}
+
+static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
+    return (uint64_t)_InterlockedOr64((volatile long long*)p, (long long)v);
+}
+
+static inline uint64_t coro_at_and(volatile uint64_t* p, uint64_t v) {
+    return (uint64_t)_InterlockedAnd64((volatile long long*)p, (long long)v);
+}
+
+static inline void coro_at_fence(void) {
+    _ReadWriteBarrier();
+    MemoryBarrier();
+}
+
+static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
+                                        uint64_t expected, uint64_t desired) {
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)desired, (long long)expected);
+        if (observed == expected) return expected;
+        expected = observed;
+    }
 }
 
 #else

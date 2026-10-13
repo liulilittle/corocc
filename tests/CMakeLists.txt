@@ -147,3 +147,30 @@ add_test(NAME sched_sleep COMMAND test_sched_sleep)
 add_executable(test_sched_join unit/test_sched_join.c)
 target_link_libraries(test_sched_join PRIVATE corocc)
 add_test(NAME sched_join COMMAND test_sched_join)
+
+# M:N work-stealing runtime (L2).
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    add_executable(test_rt_mn unit/test_rt_mn.c)
+    target_include_directories(test_rt_mn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_mn PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_mn COMMAND test_rt_mn)
+
+    # P3 sync primitives on the M:N runtime.
+    add_executable(test_rt_sync unit/test_rt_sync.c)
+    target_include_directories(test_rt_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_sync PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_sync COMMAND test_rt_sync)
+endif()
+
+# Custom allocator interface (openppp2-style).
+add_executable(test_coro_allocator unit/test_coro_allocator.c)
+target_link_libraries(test_coro_allocator PRIVATE corocc)
+add_test(NAME coro_allocator COMMAND test_coro_allocator)
+
+# M:N runtime benchmark (not a ctest: reports throughput).
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
+    add_executable(bench_rt_mn ../perf/bench_rt_mn.c)
+    target_link_libraries(bench_rt_mn PRIVATE corocc Threads::Threads)
+endif()

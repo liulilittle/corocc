@@ -18,6 +18,7 @@
 #else
 
 #include <pthread.h>
+#include <stdlib.h>
 
 static pthread_key_t  g_exit_key;
 static pthread_once_t g_exit_once = PTHREAD_ONCE_INIT;
@@ -42,16 +43,28 @@ struct threads_start_args {
 
 static void* threads_start(void* p) {
     struct threads_start_args* a = (struct threads_start_args*)p;
-    a->fn(a->arg);
+    coro_thread_fn fn = a->fn;
+    void*          arg = a->arg;
+    free(a); /* the starter owns the args heap block; release after unpack */
+    fn(arg);
     return NULL;
 }
 
 int coro_thread_create(coro_thread_t* out, coro_thread_fn fn, void* arg) {
-    struct threads_start_args start;
+    struct threads_start_args* start;
     if (!out || !fn) return -1;
-    start.fn = fn;
-    start.arg = arg;
-    return pthread_create(out, NULL, threads_start, &start) == 0 ? 0 : -1;
+    /* The args cannot live on the caller's stack: pthread_create returns as
+       soon as the thread is created, but the new thread reads its argument
+       whenever it first runs. Allocate once, let the thread free it. */
+    start = (struct threads_start_args*)malloc(sizeof *start);
+    if (!start) return -1;
+    start->fn = fn;
+    start->arg = arg;
+    if (pthread_create(out, NULL, threads_start, start) != 0) {
+        free(start);
+        return -1;
+    }
+    return 0;
 }
 
 int coro_thread_join(coro_thread_t t) {

@@ -134,6 +134,7 @@ coro_attr_t coro_attr_default(void) {
     a.stack_size = 0;
     a.name = NULL;
     a.flags = CORO_F_NONE;
+    a.allocator = NULL;
     return a;
 }
 
@@ -146,19 +147,39 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
 
     size_t stk_size = a.stack_size ? a.stack_size : CORO_DEFAULT_STACK_SIZE;
 
-    coro_t* c = (coro_t*)calloc(1, sizeof *c);
-    if (!c) return CORO_ENOMEM;
-
-    if (coro_stack_alloc(&c->stack, stk_size) != CORO_OK) {
-        free(c);
-        return CORO_ENOMEM;
+    coro_t* c;
+    if (a.allocator) {
+        c = (coro_t*)a.allocator->alloc_handle(sizeof *c);
+        if (!c) return CORO_ENOMEM;
+        void* mem = NULL;
+        if (a.allocator->alloc_stack(&mem, stk_size) != CORO_OK) {
+            a.allocator->free_handle(c);
+            return CORO_ENOMEM;
+        }
+        c->stack.base = mem;
+        c->stack.total = stk_size;
+        c->stack.lo = (char*)mem;
+        c->stack.usable = stk_size;
+        c->stack.guard_bytes = 0;
+    } else {
+        c = (coro_t*)calloc(1, sizeof *c);
+        if (!c) return CORO_ENOMEM;
+        if (coro_stack_alloc(&c->stack, stk_size) != CORO_OK) {
+            free(c);
+            return CORO_ENOMEM;
+        }
     }
     c->fn = fn;
     c->arg = arg;
     c->attr = a;
     if (coro_ctx_init(&c->self, &c->stack, coro_entry, c) != 0) {
-        coro_stack_free(&c->stack);
-        free(c);
+        if (a.allocator) {
+            a.allocator->free_stack(c->stack.base);
+            a.allocator->free_handle(c);
+        } else {
+            coro_stack_free(&c->stack);
+            free(c);
+        }
         return CORO_EINVAL;
     }
     coro_at_store(&c->w, CORO_W_NEW);
@@ -168,19 +189,20 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
 
 coro_status coro_destroy(coro_t* c) {
     if (!c) return CORO_EINVAL;
-    /* Freeing the running coroutine would unmap its own stack, and freeing one
-       that is mid-switch would leave the resumer returning into freed memory. */
     if (coro_current() == c) return CORO_EBUSY;
 
     uint64_t cur = coro_at_load(&c->w);
     if (cur == CORO_W_RUNNING || cur == CORO_W_SWITCHING) return CORO_EBUSY;
-    /* Single transition to DEAD, no retry loop: if another writer wins the
-       compare-and-swap the state changed under us and we report the loss. */
     if (!coro_at_cas(&c->w, &cur, CORO_W_DEAD)) return CORO_EBUSY;
 
     coro_ctx_destroy(&c->self);
-    coro_stack_free(&c->stack);
-    free(c);
+    if (c->attr.allocator) {
+        c->attr.allocator->free_stack(c->stack.base);
+        c->attr.allocator->free_handle(c);
+    } else {
+        coro_stack_free(&c->stack);
+        free(c);
+    }
     return CORO_OK;
 }
 

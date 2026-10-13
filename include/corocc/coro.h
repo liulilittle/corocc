@@ -92,6 +92,8 @@ typedef enum {
     CORO_DEAD       /**< Entry returned or cancellation finished the coroutine. */
 } coro_state;
 
+typedef struct coro_allocator coro_allocator_t;
+
 /**
  * coro_attr_t -- coroutine creation attributes.
  *
@@ -103,6 +105,7 @@ typedef struct coro_attr {
     size_t      stack_size; /**< Desired usable stack bytes; 0 selects CORO_DEFAULT_STACK_SIZE. */
     const char *name;       /**< Optional diagnostic name. Borrowed: the caller keeps it alive. */
     unsigned    flags;      /**< CORO_F_*; anything but CORO_F_NONE is rejected. */
+    const coro_allocator_t *allocator; /**< Custom stack/handle allocator, or NULL for defaults. */
 } coro_attr_t;
 
 /**
@@ -116,11 +119,30 @@ typedef struct coro_attr {
 typedef struct coro coro_t;
 
 /**
+ * coro_allocator_t -- custom memory allocator for coroutine stacks and handles.
+ *
+ * When attr->allocator is non-NULL, coro_create uses alloc_stack to obtain
+ * the stack memory and alloc_handle to allocate the coro_t handle itself;
+ * coro_destroy calls free_stack and free_handle to release them. When NULL,
+ * the library uses its built-in mmap-based stack and calloc/free.
+ *
+ * The allocator must remain valid for the lifetime of every coroutine created
+ * with it. All callbacks must be thread-safe.
+ */
+typedef struct coro_allocator {
+    coro_status (*alloc_stack)(void** mem, size_t size);
+    void        (*free_stack)(void* mem);
+    void*       (*alloc_handle)(size_t size);
+    void        (*free_handle)(void* p);
+} coro_allocator_t;
+
+/**
  * coro_attr_default -- the default attributes.
  *
  * @return An attribute structure with stack_size 0 (the default size), name
- *         NULL and flags CORO_F_NONE. The returned value is suitable to pass
- *         to coro_create and may be modified field by field afterwards.
+ *         NULL, flags CORO_F_NONE, and allocator NULL. The returned value is
+ *         suitable to pass to coro_create and may be modified field by field
+ *         afterwards.
  */
 COROCC_API coro_attr_t coro_attr_default(void);
 
