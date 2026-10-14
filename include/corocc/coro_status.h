@@ -55,7 +55,8 @@ typedef enum {
     CORO_ECANCELED,   /**< Operation aborted by cancellation. */
     CORO_EDESTROYED,  /**< Target was already destroyed. */
     CORO_ESTALE,      /**< Referenced credential/generation is stale. */
-    CORO_EAGAIN       /**< Transient condition; caller may retry. */
+    CORO_EAGAIN,      /**< Transient condition; caller may retry. */
+    CORO_ECLOSED      /**< Channel is closed (no further exchange possible). */
 } coro_status;
 
 /**

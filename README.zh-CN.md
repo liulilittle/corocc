@@ -183,6 +183,39 @@ coro_status s = coro_resume(worker, tok, &next);   /* 等待 A 的结果 */
 随该里程碑交付。完整跨线程契约与并发测试矩阵见
 [docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md)。
 
+## L2 运行时同步原语
+
+M:N 运行时还提供写者优先的读写锁与 FIFO 通道,两者均可按值内嵌、零初始化即可用:
+
+```c
+#include <corocc/coro_rt.h>
+
+int main(void) {
+    coro_rt_t* rt = coro_rt_create(2);
+
+    coro_rt_rwlock_t lock;               /* 无需初始化调用 */
+    if (coro_rt_rwlock_rdlock(rt, &lock) == CORO_OK)
+        coro_rt_rwlock_rdunlock(rt, &lock);
+
+    coro_rt_channel_t chan;
+    coro_rt_channel_init(&chan, 8);      /* cap==0 表示无界 */
+    coro_rt_channel_send(rt, &chan, (void*)1);
+    void* got = NULL;
+    coro_rt_channel_recv(rt, &chan, &got);
+    coro_rt_channel_close(rt, &chan);    /* 先排空,再报 ECLOSED */
+    coro_rt_channel_destroy(&chan);
+
+    coro_rt_destroy(rt);
+    return 0;
+}
+```
+
+rwlock 的 try 路径返回 `CORO_EBUSY`,非运行时协程内调用返回 `CORO_ESTALE`,
+无匹配持有的解锁返回 `CORO_ESTATE`,等待被取消返回 `CORO_ECANCELED`;
+channel 在满时 `trysend` 与空时 `tryrecv` 返回 `CORO_EBUSY`,
+关闭并排空后返回 `CORO_ECLOSED`。完整契约见
+`include/corocc/coro_rt.h`。
+
 ## 已知限制
 
 - **范围:**目前只交付 L0 层。协程对象与 token 凭证协议、带工作窃取的

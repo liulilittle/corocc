@@ -161,6 +161,18 @@ if (NOT WIN32)
     target_include_directories(test_rt_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_sync PRIVATE corocc Threads::Threads)
     add_test(NAME rt_sync COMMAND test_rt_sync)
+
+    # M5: writer-preferring read/write lock on the M:N runtime.
+    add_executable(test_rt_rwlock unit/test_rt_rwlock.c)
+    target_include_directories(test_rt_rwlock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_rwlock PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_rwlock COMMAND test_rt_rwlock)
+
+    # M5: bounded/unbounded channel on the M:N runtime.
+    add_executable(test_rt_channel unit/test_rt_channel.c)
+    target_include_directories(test_rt_channel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_channel PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_channel COMMAND test_rt_channel)
 endif()
 
 # Custom allocator interface (openppp2-style).

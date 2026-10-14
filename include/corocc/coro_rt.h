@@ -1,4 +1,4 @@
-/*
+﻿/*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
  * coro_rt.h -- the M:N work-stealing runtime (L2).
@@ -58,6 +58,230 @@ struct coro_rt_sem {
     uint64_t count;  /**< Private: token count (atomic). */
     void*    waitq;  /**< Private: FIFO of parked coroutines. */
 };
+
+struct coro_rt_rwlock {
+    uint64_t state;    /**< Private: bit0 = RW_W (writer holds the lock), bit1 =
+                            RW_WW (a writer is waiting), bits[2..63] right-
+                            shifted by 2 = active reader count. Whole word is
+                            read and written with one atomic operation. */
+    void*    rd_waitq; /**< Private: FIFO of parked readers. */
+    void*    wr_waitq; /**< Private: FIFO of parked writers. */
+};
+
+struct coro_rt_channel {
+    void**   slots;  /**< Private: ring of queued items (lazily allocated). */
+    size_t   cap;    /**< Private: allocated ring capacity. */
+    size_t   len;    /**< Private: queued item count. */
+    size_t   head;   /**< Private: ring head index. */
+    size_t   limit;  /**< Private: configured maximum, 0 for unbounded. */
+    uint64_t closed; /**< Private: close flag (atomic). */
+    void*    sendq;  /**< Private: FIFO of parked senders. */
+    void*    recvq;  /**< Private: FIFO of parked receivers. */
+};
+
+/**
+ * coro_rt_rwlock_t -- a writer-preferring read/write lock for runtime
+ * coroutines.
+ *
+ * Many readers may hold the lock together, or one writer, never both. The
+ * lock is a single 64-bit state word: bit 0 (RW_W) marks a writer holding the
+ * lock, bit 1 (RW_WW) marks a writer waiting, and bits 2..63 (shifted right by
+ * two) count active readers. Acquiring and releasing are single
+ * compare-and-swaps on that word, so the uncontended paths take no lock at
+ * all; a coroutine that has to wait parks on one of two FIFO chains and
+ * yields, so a worker is never blocked.
+ *
+ * The lock is writer-preferring: once a writer is queued, new readers wait
+ * until it has run, which keeps writers from starving under a reader storm.
+ * The flip side -- a reader could in principle starve under a continuous
+ * stream of writers -- is the documented trade-off.
+ *
+ * A lock may be destroyed only when it is unlocked and nothing waits on it
+ * (drain the runtime first). It is embeddable by value and a zero-initialized
+ * object is valid, so no coro_rt_rwlock_init call is required.
+ */
+typedef struct coro_rt_rwlock coro_rt_rwlock_t;
+
+/** coro_rt_rwlock_init -- reset a read/write lock to the free state. Optional. */
+COROCC_API void coro_rt_rwlock_init(coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_rwlock_rdlock -- take a shared read hold.
+ *
+ * Succeeds immediately unless a writer holds the lock or is waiting; otherwise
+ * the coroutine parks and yields until released.
+ *
+ * @return CORO_OK on success; CORO_ESTALE when not called from a coroutine on
+ *         this runtime; CORO_ESTATE on reader-count overflow; CORO_EINVAL for
+ *         NULL; CORO_ECANCELED when the wait is cancelled.
+ */
+COROCC_API coro_status coro_rt_rwlock_rdlock(coro_rt_t* rt,
+                                             coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_rwlock_tryrdlock -- take a read hold without ever blocking.
+ *
+ * @return CORO_OK when acquired; CORO_EBUSY when a writer holds or waits;
+ *         CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_rwlock_tryrdlock(coro_rt_t* rt,
+                                                coro_rt_rwlock_t* l);
+/**
+ * coro_rt_rwlock_rdunlock -- release a shared read hold.
+ *
+ * Must be called by a current reader. If it was the last reader and a writer
+ * is waiting, the longest-waiting writer is woken.
+ *
+ * @return CORO_OK on success; CORO_ESTATE when the caller holds no read hold;
+ *         CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_rwlock_rdunlock(coro_rt_t* rt,
+                                               coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_rwlock_wrlock -- take the exclusive write hold.
+ *
+ * Succeeds immediately when the lock is free, and is granted ahead of new
+ * readers once queued. Parks and yields otherwise.
+ *
+ * @return CORO_OK on success; CORO_ESTALE when not called from a coroutine on
+ *         this runtime; CORO_EINVAL for NULL; CORO_ECANCELED when cancelled.
+ */
+COROCC_API coro_status coro_rt_rwlock_wrlock(coro_rt_t* rt,
+                                             coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_rwlock_trywrlock -- take the write hold without ever blocking.
+ *
+ * @return CORO_OK when acquired; CORO_EBUSY when the lock is held or waited
+ *         on; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_rwlock_trywrlock(coro_rt_t* rt,
+                                                coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_rwlock_wrunlock -- release the write hold.
+ *
+ * Hands the lock to the longest-waiting writer if one is queued; otherwise
+ * releases every waiting reader (a wake storm bounded by the reader count).
+ *
+ * @return CORO_OK on success; CORO_ESTATE when the caller holds no write hold;
+ *         CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt,
+                                               coro_rt_rwlock_t* l);
+
+/**
+ * coro_rt_channel_t -- a void* message channel between runtime coroutines.
+ *
+ * A bounded (capacity > 0) or unbounded (capacity 0) FIFO queue with a single
+ * producer/consumer handshake per item: each successful send wakes one parked
+ * receiver and each successful recv wakes one parked sender, so the blocked
+ * side is resumed exactly once. Items are opaque void* -- the caller owns the
+ * lifetime of whatever they point at.
+ *
+ * The storage is lazily allocated; a bounded channel allocates its ring up
+ * front, an unbounded one grows on demand. A channel may be destroyed only
+ * after it is closed and drained. Closing lets receivers drain whatever is
+ * already queued and then reports CORO_ECLOSED; senders are refused and
+ * released immediately. It is embeddable by value; a zero-initialized object
+ * is an empty unbounded channel, so no coro_rt_channel_init call is required
+ * for that case.
+ *
+ * Note: a bounded channel's minimum capacity is one; capacity 0 means
+ * *unbounded*, not a rendezvous channel.
+ */
+typedef struct coro_rt_channel coro_rt_channel_t;
+
+/**
+ * coro_rt_channel_init -- prepare a channel.
+ *
+ * @param ch    Channel to initialize.
+ * @param cap   Maximum queued items, or 0 for unbounded.
+ * @return CORO_OK on success; CORO_ENOMEM when the initial ring cannot be
+ *         allocated; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_channel_init(coro_rt_channel_t* ch, size_t cap);
+/**
+ * coro_rt_channel_destroy -- release a channel's storage.
+ *
+ * Refuses while items are still queued or coroutines are parked on it
+ * (CORO_EBUSY); drain and close first. On success the channel is reset to the
+ * zero-initialized state and a second destroy is a no-op.
+ *
+ * @return CORO_OK on success; CORO_EBUSY when not drained; CORO_EINVAL for
+ *         NULL.
+ */
+COROCC_API coro_status coro_rt_channel_destroy(coro_rt_channel_t* ch);
+
+/**
+ * coro_rt_channel_send -- enqueue one value, parking until room is available.
+ *
+ * @return CORO_OK on success; CORO_ESTALE when not called from a coroutine on
+ *         this runtime; CORO_ECLOSED when the channel is closed; CORO_ENOMEM
+ *         when an unbounded channel cannot grow; CORO_EINVAL for NULL;
+ *         CORO_ECANCELED when the wait is cancelled.
+ */
+COROCC_API coro_status coro_rt_channel_send(coro_rt_t* rt,
+                                            coro_rt_channel_t* ch, void* v);
+
+/**
+ * coro_rt_channel_trysend -- enqueue one value without ever blocking.
+ *
+ * @return CORO_OK on success; CORO_EBUSY when a bounded channel is full;
+ *         CORO_ECLOSED when the channel is closed; CORO_ENOMEM on allocation
+ *         failure; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_channel_trysend(coro_rt_t* rt,
+                                               coro_rt_channel_t* ch, void* v);
+
+/**
+ * coro_rt_channel_recv -- dequeue one value, parking until one is available.
+ *
+ * A closed channel first yields every queued item, then reports CORO_ECLOSED.
+ *
+ * @return CORO_OK with *out set; CORO_ESTALE when not called from a coroutine
+ *         on this runtime; CORO_ECLOSED when the channel is closed and empty;
+ *         CORO_EINVAL for NULL; CORO_ECANCELED when the wait is cancelled.
+ */
+COROCC_API coro_status coro_rt_channel_recv(coro_rt_t* rt,
+                                            coro_rt_channel_t* ch, void** out);
+
+/**
+ * coro_rt_channel_tryrecv -- dequeue one value without ever blocking.
+ *
+ * @return CORO_OK with *out set; CORO_EBUSY when empty and open;
+ *         CORO_ECLOSED when closed and empty; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_channel_tryrecv(coro_rt_t* rt,
+                                               coro_rt_channel_t* ch,
+                                               void** out);
+
+/**
+ * coro_rt_channel_close -- close the channel and release every waiter.
+ *
+ * Queued items remain readable; after they are drained recv reports
+ * CORO_ECLOSED. Every parked sender and receiver is woken; closing is
+ * idempotent. Safe to call from any thread.
+ *
+ * @return CORO_OK on success; CORO_EINVAL for NULL.
+ */
+COROCC_API coro_status coro_rt_channel_close(coro_rt_t* rt,
+                                             coro_rt_channel_t* ch);
+
+/**
+ * coro_rt_channel_size -- number of queued items (advisory).
+ *
+ * @return The queued count, or 0 for NULL.
+ */
+COROCC_API size_t coro_rt_channel_size(const coro_rt_channel_t* ch);
+
+/**
+ * coro_rt_channel_closed -- whether the channel has been closed.
+ *
+ * @return Non-zero when closed, 0 otherwise (also 0 for NULL).
+ */
+COROCC_API int coro_rt_channel_closed(const coro_rt_channel_t* ch);
 
 /**
  * coro_rt_create -- create a runtime with a pool of worker threads.

@@ -169,6 +169,41 @@ coroutine-local slots (`coro_local_get/set`), and a coroutine belongs to the
 thread that first drove it. The full contract, the state-word encoding and the
 measured costs are documented in [docs/api/coro.md](docs/api/coro.md).
 
+## L2 runtime primitives
+
+The M:N runtime also ships a writer-preferring reader/writer lock and a FIFO
+channel, both embeddable by value and zero-initialized:
+
+```c
+#include <corocc/coro_rt.h>
+
+int main(void) {
+    coro_rt_t* rt = coro_rt_create(2);
+
+    coro_rt_rwlock_t lock;          /* no init call needed */
+    if (coro_rt_rwlock_rdlock(rt, &lock) == CORO_OK)
+        coro_rt_rwlock_rdunlock(rt, &lock);
+
+    coro_rt_channel_t chan;
+    coro_rt_channel_init(&chan, 8);   /* capacity 0 = unbounded */
+    coro_rt_channel_send(rt, &chan, (void*)1);
+    void* got = NULL;
+    coro_rt_channel_recv(rt, &chan, &got);
+    coro_rt_channel_close(rt, &chan);       /* drains, then reports ECLOSED */
+    coro_rt_channel_destroy(&chan);
+
+    coro_rt_destroy(rt);
+    return 0;
+}
+```
+
+`coro_rt_rwlock_*` reports `CORO_EBUSY` from the try paths, `CORO_ESTALE`
+outside a runtime coroutine, `CORO_ESTATE` for an unlock with no matching hold
+and `CORO_ECANCELED` when a wait is cut short. The channel reports
+`CORO_EBUSY` for a full `trysend` or an empty `tryrecv`, and `CORO_ECLOSED`
+once it is closed and drained. A full contract lives in the headers under
+`include/corocc/coro_rt.h`.
+
 ## Multithreading
 
 A coroutine belongs to the thread that first drove it. A wakeup requested from

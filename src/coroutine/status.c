@@ -20,6 +20,7 @@ const char* coro_status_str(coro_status status) {
     case CORO_EDESTROYED:return "CORO_EDESTROYED";
     case CORO_ESTALE:    return "CORO_ESTALE";
     case CORO_EAGAIN:    return "CORO_EAGAIN";
+    case CORO_ECLOSED:   return "CORO_ECLOSED";
     default:             return "CORO_UNKNOWN";
     }
 }
