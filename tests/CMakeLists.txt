@@ -260,7 +260,7 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     add_test(NAME rt_scope_thread COMMAND test_rt_scope_thread)
     set_tests_properties(rt_scope_thread PROPERTIES TIMEOUT 120)
 
-# Custom allocator interface (openppp2-style).
+# Custom allocator interface.
 add_executable(test_coro_allocator unit/test_coro_allocator.c)
 target_link_libraries(test_coro_allocator PRIVATE corocc)
 add_test(NAME coro_allocator COMMAND test_coro_allocator)

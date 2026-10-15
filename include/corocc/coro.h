@@ -14,8 +14,7 @@
  * coroutine. A stale or duplicated token is rejected instead of corrupting the
  * coroutine's stack, so "resume" is a claim-and-switch operation that cannot
  * double-enter a suspension point and never aborts: every failure is reported
- * as a coro_status. See docs/superpowers/specs/2026-10-11-corocc-design.md
- * section 3.3 for the contract.
+ * as a coro_status.
  *
  * This header is conservative: it compiles as C99 and C++11, includes no
  * third-party header, and never exposes a Boost type.
