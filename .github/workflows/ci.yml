@@ -106,6 +106,27 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash .github/scripts/header-conformance.sh
 
+  boost-asio:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libboost-dev clang
+      # The wrappers are header-only, but the smoke spawns a coro_rt runtime,
+      # so the runtime objects are built first (same recipe as the build note
+      # in tests/boost/asio_smoke.cpp).
+      - name: build corocc runtime objects
+        run: |
+          mkdir -p smoke-build
+          for f in src/coroutine/*.c src/scheduler/*.c src/platform/*.c; do
+            gcc -std=gnu99 -O2 -Iinclude -Isrc -c "$f" -o "smoke-build/$(basename "$f" .c).o"
+          done
+          gcc -c src/arch/x86_64_sysv_elf_gas.S -o smoke-build/x86_64_gas.o
+      - name: smoke (g++, -std=c++11 -Wall -Wextra -Werror)
+        run: g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/boost/asio_smoke.cpp smoke-build/*.o -pthread -o smoke && ./smoke
+      - name: smoke (clang++, -std=c++11 -Wall -Wextra -Werror)
+        run: clang++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/boost/asio_smoke.cpp smoke-build/*.o -pthread -o smoke-clang && ./smoke-clang
+
   cross:
     name: cross ${{ matrix.abi }}
     runs-on: ubuntu-24.04
@@ -242,7 +263,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, cross, windows-msvc, ndk]
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, ndk]
     # NOTE: perf-report is intentionally NOT in needs (non-required).
     runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
     timeout-minutes: 5
@@ -257,6 +278,7 @@ jobs:
           R_TSAN: ${{ needs.tsan.result }}
           R_NOSPIN: ${{ needs.nospin.result }}
           R_HEADERS: ${{ needs.headers.result }}
+          R_BOOST_ASIO: ${{ needs.boost-asio.result }}
           R_CROSS: ${{ needs.cross.result }}
           R_WINDOWS: ${{ needs.windows-msvc.result }}
           R_NDK: ${{ needs.ndk.result }}
@@ -278,6 +300,7 @@ jobs:
           report tsan            "$R_TSAN"
           report nospin          "$R_NOSPIN"
           report headers         "$R_HEADERS"
+          report boost-asio      "$R_BOOST_ASIO"
           report cross           "$R_CROSS"
           report windows-msvc    "$R_WINDOWS"
           report ndk             "$R_NDK"
