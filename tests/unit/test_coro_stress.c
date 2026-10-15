@@ -1,6 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
+#include <stdint.h>
 #include <string.h>
 
 /* Milestone M2 Task 5, part 4: randomised stress over the credential API.
@@ -38,14 +39,17 @@ static void entry_fuzz(void* arg) {
    (C4305 under /W4 /WX); the low 32 bits keep the same xorshift mixing. */
 static unsigned long g_state = 0x9e3779b9ul;
 #else
-static unsigned long g_state = 0x9e3779b97f4a7c15ul;
+/* 64-bit xorshift state. The type is pinned to uint64_t: on the 32-bit ABIs
+   unsigned long is only 32 bits wide, so the golden-ratio constant would be
+   truncated (and fail the build under -Werror=overflow). */
+static uint64_t g_state = 0x9e3779b97f4a7c15ull;
 #endif
 
 static unsigned long rnd(void) {
     g_state ^= g_state << 13;
     g_state ^= g_state >> 7;
     g_state ^= g_state << 17;
-    return g_state;
+    return (unsigned long)g_state;
 }
 
 static unsigned pick(void) {

@@ -26,7 +26,8 @@ stage() { # triple, build_dir
     local out="$DIST_DIR/$triple"
     mkdir -p "$out/lib" "$out/include/corocc"
     cp "$bdir/libcorocc.a" "$out/lib/" || return 1
-    cp include/corocc/*.h "$out/include/corocc/" || return 1
+    # P1-2: *.h* also ships the header-only C++11 wrapper (coro.hpp).
+    cp include/corocc/*.h* "$out/include/corocc/" || return 1
     {
         echo "corocc $triple"
         echo "built by: $(basename "$0")"

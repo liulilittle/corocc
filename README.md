@@ -15,7 +15,7 @@ Milestone 1 (skeleton + L0 execution contexts) is complete:
 
 | Area | State |
 | --- | --- |
-| Layers | L0-L3 implemented: context primitives (`coro_stack`, `coro_ctx`), coroutine objects, the M:N work-stealing runtime with synchronization primitives, and the structured-concurrency scope layer; the C++11 wrapper and the Windows port are follow-ups |
+| Layers | L0-L3 implemented: context primitives (`coro_stack`, `coro_ctx`), coroutine objects, the M:N work-stealing runtime with synchronization primitives, and the structured-concurrency scope layer; the header-only C++11 wrapper (`coro.hpp`, M8) and the Windows (MSVC) port (M9) have landed |
 | Architectures | x86_64 (SysV) and aarch64 (AAPCS) vendored assembly; aarch64 verified under `qemu-aarch64` |
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
 | Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`); clean under ASan, including stack-use-after-return detection |
@@ -260,13 +260,53 @@ is not provided yet: it needs the scheduler's work-stealing structures and
 arrives with that milestone. See [docs/api/coro.md](docs/api/coro.md) for the
 full cross-thread contract and the concurrency test matrix.
 
+## The C++11 wrapper (header-only)
+
+`include/corocc/coro.hpp` is the C++11 face of the same library: RAII
+handles (`coroutine`, `runtime`, `scheduler`, `task<R>`, `scope`, `cell<R>`)
+over the C entry points, with typed results, chrono durations and an
+exception capture-and-deliver boundary. It adds no library and no build
+step; a C translation unit that never includes the header is unaffected.
+
+```cpp
+#include <corocc/coro.hpp>
+
+int main() {
+    corocc::runtime rt(4);                 /* 4 workers; 0 = the default */
+    corocc::task<int> t;
+    rt.spawn_h(t, [] { return 7; });
+    corocc::status st = t.wait();          /* thread-side targeted closeout */
+    if (st.ok()) {
+        int v = t.get();
+        (void)v;
+    }
+
+    corocc::scope s(rt);                   /* every child carries a cell */
+    corocc::cell<int> a;
+    s.spawn(a, [] { return 40 + 2; });
+    st = s.wait();
+    if (st.code() == CORO_ECANCELED && s.first_exception()) {
+        /* an abnormal end, not a cancellation */
+    }
+    s.destroy();
+    rt.wait_all();
+    return 0;
+}
+```
+
+Read this before decoding a status: on this path `CORO_ECANCELED` has three
+meanings (a requested cancel, a fired deadline, an abnormal child end), and
+`first_exception()` disambiguates. The full reference -- build rules, the
+exception model, ownership/lifetime red lines and the `native()` contract --
+is in [docs/api/coro_cpp.md](docs/api/coro_cpp.md).
+
 ## Known limitations
 
 - **Scope:** the L0-L3 layers ship today (context primitives, coroutine
   objects with the token credential protocol, the M:N work-stealing runtime
   with its synchronization primitives and the structured-concurrency scope
-  layer). The C++11 wrapper, the IO loop and the Windows (MSVC) port are
-  follow-up milestones.
+  layer), together with the header-only C++11 wrapper (`coro.hpp`, M8) and
+  the Windows (MSVC) port (M9). The IO loop is a follow-up milestone.
 - **Architectures:** x86_64 and aarch64 are vendored and tested; the rest of
   the planned ISA matrix (i386, arm32/armeb, mips, ppc, s390x, riscv,
   big-endian variants) is not yet wired into the build.

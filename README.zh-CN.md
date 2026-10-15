@@ -14,7 +14,7 @@
 
 | 领域 | 状态 |
 | --- | --- |
-| 分层 | L0-L3 已实现:上下文原语(`coro_stack`、`coro_ctx`)、协程对象、M:N 工作窃取运行时(含同步原语)、结构化并发 scope 层;C++11 高级封装与 Windows 移植为后续里程碑 |
+| 分层 | L0-L3 已实现:上下文原语(`coro_stack`、`coro_ctx`)、协程对象、M:N 工作窃取运行时(含同步原语)、结构化并发 scope 层;header-only C++11 封装(`coro.hpp`,M8)与 Windows(MSVC)移植(M9)均已落地 |
 | 架构 | x86_64(SysV)与 aarch64(AAPCS)汇编已 vendored;aarch64 经 `qemu-aarch64` 验证 |
 | 保护页 | 每个协程栈映射一个 `PROT_NONE` 守护页,溢出即触发缺页而不是破坏相邻内存 |
 | 消毒器 | ASan fiber-switch 钩子(`COROCC_ASAN`);ASan 下全部测试通过,含启用栈用后即返回检测 |
@@ -241,11 +241,50 @@ wait 族有两种入口:协程调用时等待者挂在 scope 事件链上;普通
 可能使 wait 不终止。完整契约、状态机与看门狗设计见
 [docs/api/coro_scope.zh-CN.md](docs/api/coro_scope.zh-CN.md)。
 
+## C++11 封装(header-only)
+
+`include/corocc/coro.hpp` 是同一库的 C++11 门面:在 C 入口点之上提供 RAII
+句柄(`coroutine`、`runtime`、`scheduler`、`task<R>`、`scope`、`cell<R>`)、
+类型化结果、chrono 时长与异常捕获-投递边界。不增加任何库或构建步骤;
+不含该头文件的 C 翻译单元不受影响。
+
+```cpp
+#include <corocc/coro.hpp>
+
+int main() {
+    corocc::runtime rt(4);                 /* 4 个 worker;0 = 库默认 */
+    corocc::task<int> t;
+    rt.spawn_h(t, [] { return 7; });
+    corocc::status st = t.wait();          /* 线程侧目标定向收口 */
+    if (st.ok()) {
+        int v = t.get();
+        (void)v;
+    }
+
+    corocc::scope s(rt);                   /* 每个子都带 cell */
+    corocc::cell<int> a;
+    s.spawn(a, [] { return 40 + 2; });
+    st = s.wait();
+    if (st.code() == CORO_ECANCELED && s.first_exception()) {
+        /* 异常终结,不是取消 */
+    }
+    s.destroy();
+    rt.wait_all();
+    return 0;
+}
+```
+
+解码状态前必读:该路径上 `CORO_ECANCELED` 有三义(请求取消 / 期限触发 /
+子异常终结),用 `first_exception()` 消歧。完整参考(构建规则、异常模型、
+所有权与寿命红线、`native()` 契约)见
+[docs/api/coro_cpp.zh-CN.md](docs/api/coro_cpp.zh-CN.md)。
+
 ## 已知限制
 
 - **范围:**目前交付 L0-L3 层(上下文原语、含 token 凭证协议的协程对象、
-  带工作窃取的 M:N 运行时与同步原语、结构化并发 scope 层)。C++11 封装、
-  IO 事件循环与 Windows(MSVC)移植为后续里程碑。
+  带工作窃取的 M:N 运行时与同步原语、结构化并发 scope 层),以及
+  header-only C++11 封装(`coro.hpp`,M8)与 Windows(MSVC)移植(M9)。
+  IO 事件循环仍为后续里程碑。
 - **架构:**x86_64 与 aarch64 已完成 vendored 与测试;计划中的其余 ISA
   (i386、arm32/armeb、mips、ppc、s390x、riscv 及大端变体)尚未接入构建。
 - **线程:**`coro_ctx` 不是线程安全的 —— 同一时刻必须由单一线程切换

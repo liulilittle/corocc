@@ -687,7 +687,9 @@ coro_status coro_rt_channel_close(coro_rt_t* rt, coro_rt_channel_t* ch) {
 }
 
 size_t coro_rt_channel_size(const coro_rt_channel_t* ch) {
-    return ch ? coro_at_load(&ch->len) : 0;
+    /* len is a size_t, so it travels through the pointer-width atomic
+       helpers: a 64-bit access would write 8 bytes over 4 on ILP32. */
+    return ch ? (size_t)coro_atp_load((const volatile uintptr_t*)&ch->len) : 0;
 }
 
 int coro_rt_channel_closed(const coro_rt_channel_t* ch) {

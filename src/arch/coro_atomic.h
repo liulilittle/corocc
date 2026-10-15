@@ -97,7 +97,7 @@ static inline void coro_at_fence(void) {
 /* Retry loop for lock-free queues: returns the value the location held after
    the winning attempt. Bounded by the caller; only the queue layer may loop. */
 static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
-                                        uint64_t expected, uint64_t desired) {
+                                         uint64_t expected, uint64_t desired) {
     for (;;) {
 #ifdef COROCC_PROBE_NOSPIN
         ++coro_probe_cas_count;
@@ -107,6 +107,31 @@ static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
             return expected;
         }
     }
+}
+
+/* Pointer-width (uintptr_t) atomics. Fields that hold pointers or size_t must
+   be accessed with exactly the machine-word width: on ILP32 a uint64_t access
+   would read or write 8 bytes over a 4-byte object. On LP64 these compile to
+   the same 8-byte atomic operations as the coro_at_* family above. */
+static inline uintptr_t coro_atp_load(const volatile uintptr_t* p) {
+    return __atomic_load_n(p, __ATOMIC_ACQUIRE);
+}
+
+static inline void coro_atp_store(volatile uintptr_t* p, uintptr_t v) {
+    __atomic_store_n(p, v, __ATOMIC_RELEASE);
+}
+
+static inline int coro_atp_cas(volatile uintptr_t* p, uintptr_t* expected,
+                               uintptr_t desired) {
+#ifdef COROCC_PROBE_NOSPIN
+    ++coro_probe_cas_count;
+#endif
+    return __atomic_compare_exchange_n(p, expected, desired, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+static inline uintptr_t coro_atp_exchange(volatile uintptr_t* p, uintptr_t v) {
+    return __atomic_exchange_n(p, v, __ATOMIC_ACQ_REL);
 }
 
 #elif defined(_MSC_VER)
@@ -219,6 +244,32 @@ static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
         if (observed == expected) return expected;
         expected = observed;
     }
+}
+
+/* Pointer-width counterpart of the family above (see the GCC/Clang section). */
+static inline uintptr_t coro_atp_load(const volatile uintptr_t* p) {
+    return (uintptr_t)_InterlockedCompareExchangePointer(
+        (void* volatile*)p, NULL, NULL);
+}
+
+static inline void coro_atp_store(volatile uintptr_t* p, uintptr_t v) {
+    _InterlockedExchangePointer((void* volatile*)p, (void*)v);
+}
+
+static inline int coro_atp_cas(volatile uintptr_t* p, uintptr_t* expected,
+                               uintptr_t desired) {
+#ifdef COROCC_PROBE_NOSPIN
+    ++coro_probe_cas_count;
+#endif
+    uintptr_t observed = (uintptr_t)_InterlockedCompareExchangePointer(
+        (void* volatile*)p, (void*)desired, (void*)*expected);
+    if (observed == *expected) return 1;
+    *expected = observed;
+    return 0;
+}
+
+static inline uintptr_t coro_atp_exchange(volatile uintptr_t* p, uintptr_t v) {
+    return (uintptr_t)_InterlockedExchangePointer((void* volatile*)p, (void*)v);
 }
 
 #else

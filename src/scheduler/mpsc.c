@@ -16,10 +16,10 @@
 #include <stddef.h>
 
 static rt_node* load_link(rt_node* volatile* p) {
-    return (rt_node*)(uintptr_t)coro_at_load((volatile uint64_t*)p);
+    return (rt_node*)coro_atp_load((const volatile uintptr_t*)p);
 }
 static void store_link(rt_node* volatile* p, rt_node* v) {
-    coro_at_store((volatile uint64_t*)p, (uint64_t)(uintptr_t)v);
+    coro_atp_store((volatile uintptr_t*)p, (uintptr_t)v);
 }
 
 void mpsc_init(mpsc* q) {
@@ -37,11 +37,11 @@ void mpsc_push(mpsc* q, rt_node* n) {
        inner retry loop advanced the head, so a later turn linked n to itself
        -- head==n made n->next=n, a self-loop that handed the same node out
        twice). */
-    rt_node* old = (rt_node*)(uintptr_t)coro_at_load((volatile uint64_t*)&q->head);
+    rt_node* old = (rt_node*)coro_atp_load((const volatile uintptr_t*)&q->head);
     for (;;) {
         n->next = old;
-        if (coro_at_cas((volatile uint64_t*)&q->head, (uint64_t*)&old,
-                        (uint64_t)(uintptr_t)n)) {
+        if (coro_atp_cas((volatile uintptr_t*)&q->head, (uintptr_t*)&old,
+                         (uintptr_t)n)) {
             break;
         }
     }
@@ -56,8 +56,8 @@ rt_node* mpsc_pop(mpsc* q) {
         return t;
     }
 
-    rt_node* head = (rt_node*)(uintptr_t)coro_at_exchange(
-        (volatile uint64_t*)&q->head, 0);
+    rt_node* head = (rt_node*)coro_atp_exchange(
+        (volatile uintptr_t*)&q->head, 0);
     if (!head) return NULL;
     /* The producers appended in reverse order (each new node became the
        head), so the chain head -> ... -> oldest reads newest-first. Reverse
@@ -77,5 +77,5 @@ rt_node* mpsc_pop(mpsc* q) {
 }
 
 int mpsc_empty(const mpsc* q) {
-    return coro_at_load((volatile uint64_t*)&q->head) == 0;
+    return coro_atp_load((const volatile uintptr_t*)&q->head) == 0;
 }

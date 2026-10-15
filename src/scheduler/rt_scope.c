@@ -79,14 +79,14 @@ static uint64_t scope_state_load(const coro_rt_scope_t* s) {
 }
 
 /* The runtime binding is published once (the first spawn) and read by
-   destroy without the lock, so it travels through the 64-bit atomic
-   helpers like every other cross-thread word in this layer. */
+   destroy without the lock, so it travels through the pointer-width atomic
+   helpers like every other cross-thread pointer in this layer. */
 static void scope_bind_rt(coro_rt_scope_t* s, coro_rt_t* rt) {
-    coro_at_store((volatile uint64_t*)&s->rt, (uint64_t)(uintptr_t)rt);
+    coro_atp_store((volatile uintptr_t*)&s->rt, (uintptr_t)rt);
 }
 
 static coro_rt_t* scope_bound_rt(const coro_rt_scope_t* s) {
-    return (coro_rt_t*)(uintptr_t)coro_at_load((volatile uint64_t*)&s->rt);
+    return (coro_rt_t*)coro_atp_load((const volatile uintptr_t*)&s->rt);
 }
 
 /* The aggregate word, a coro_status code carried in a uint64_t field. */

@@ -38,12 +38,14 @@ static CORO_TLS coro_runtime* tls_runtime;
 
 /* Queue access. Every field is read and written through the atomic helpers so
    the lock provides mutual exclusion without the accessor being a data race;
-   the fields themselves stay plain pointers. */
+   the fields themselves stay plain pointers. The pointer-width helpers are
+   used because these fields are pointers: on ILP32 a 64-bit access would
+   clobber the neighbouring word. */
 static coro_delivery* q_load(coro_delivery* const* field) {
-    return (coro_delivery*)(uintptr_t)coro_at_load((volatile uint64_t*)field);
+    return (coro_delivery*)coro_atp_load((const volatile uintptr_t*)field);
 }
 static void q_store(coro_delivery** field, coro_delivery* value) {
-    coro_at_store((volatile uint64_t*)field, (uint64_t)(uintptr_t)value);
+    coro_atp_store((volatile uintptr_t*)field, (uintptr_t)value);
 }
 
 coro_runtime* coro_runtime_current(void) {

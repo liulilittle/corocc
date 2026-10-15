@@ -286,3 +286,54 @@ if (MSVC)
     # one environment switch (D25_SPIN).
     target_compile_definitions(probe_collect_race PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
+
+# ---- M8: the C++11 wrapper suites (header-only; the C library is unchanged) ----
+# P2-2: every wrapper target pins CXX_STANDARD 11 + REQUIRED. MSVC has no
+# C++11 mode; there the accepted baseline is the default /std:c++14 under
+# /W4 /WX (the header avoids post-C++11 facilities, not just post-C++11
+# flags).
+function(corocc_add_cpp_test name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE corocc Threads::Threads)
+    set_target_properties(${name} PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES TIMEOUT 120)
+endfunction()
+
+corocc_add_cpp_test(cpp_types      cpp/test_cpp_types.cpp)
+corocc_add_cpp_test(cpp_coroutine  cpp/test_cpp_coroutine.cpp)
+corocc_add_cpp_test(cpp_runtime    cpp/test_cpp_runtime.cpp)
+corocc_add_cpp_test(cpp_scheduler  cpp/test_cpp_scheduler.cpp)
+corocc_add_cpp_test(cpp_scope      cpp/test_cpp_scope.cpp)
+corocc_add_cpp_test(cpp_sync       cpp/test_cpp_sync.cpp)
+# The exception suite carries the death tests (self-destroy while running,
+# detached exception with the default handler, cell::get() before the child
+# finished); fork on POSIX, CreateProcess re-exec on Windows.
+corocc_add_cpp_test(cpp_exceptions cpp/test_cpp_exceptions.cpp)
+corocc_add_cpp_test(cpp_interop    cpp/test_cpp_interop.cpp)
+
+# The ODR pin: two TUs including the same header (opposite include orders),
+# function-local statics land on the same address, and noexcept/sizeof stay
+# identical across TUs.
+add_executable(cpp_odr cpp/test_cpp_odr.cpp cpp/test_cpp_odr_b.cpp)
+target_link_libraries(cpp_odr PRIVATE corocc Threads::Threads)
+set_target_properties(cpp_odr PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
+add_test(NAME cpp_odr COMMAND cpp_odr)
+set_tests_properties(cpp_odr PROPERTIES TIMEOUT 120)
+
+# The C++ A/B switch benchmark. P1-4: the measured gate is defined on a
+# Release-like, non-ASan build; in other configurations the target is still
+# built but the ctest entry is not registered. The ctest entry runs the
+# design's LOOSE gate (--loose: >=10M round trips/s both faces, ratio >=
+# 0.85 -- a coarse-regression tripwire); the strict gate (>=20M, ratio
+# >= 0.95) stays the manual/bench-section run. RUN_SERIAL keeps the
+# measurement free of sibling-test interference.
+add_executable(bench_cpp_switch ../perf/bench_cpp_switch.cpp)
+target_link_libraries(bench_cpp_switch PRIVATE corocc Threads::Threads)
+set_target_properties(bench_cpp_switch PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
+if (NOT COROCC_ASAN AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR
+                         CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR
+                         CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
+    add_test(NAME cpp_perf COMMAND bench_cpp_switch --loose)
+    set_tests_properties(cpp_perf PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+endif()

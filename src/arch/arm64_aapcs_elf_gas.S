@@ -56,7 +56,7 @@
 .text
 .align  2
 .global corocc_asm_make
-.type   make_fcontext, %function
+.type   corocc_asm_make, %function
 corocc_asm_make:
     # shift address in x0 (allocated stack) to lower 16 byte boundary
     and x0, x0, ~0xF
@@ -143,7 +143,7 @@ finish:
 .text
 .align  2
 .global corocc_asm_jump
-.type   jump_fcontext, %function
+.type   corocc_asm_jump, %function
 corocc_asm_jump:
     # prepare stack for GP + FPU
     sub  sp, sp, #0xb0
