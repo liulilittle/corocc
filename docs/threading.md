@@ -97,9 +97,11 @@ Synchronization primitives (`coro_rt_mutex`, `coro_rt_cond`, `coro_rt_sem`,
 
 ### Coroutine stack reuse
 
-Finished coroutine stacks are recycled through a bounded per-runtime pool
-instead of being unmapped immediately, and a later default-size spawn can
-reuse one. Three consequences are part of the contract:
+When a detached coroutine finishes, the runtime's reclaim path parks its
+stack in a bounded per-runtime pool instead of unmapping it, and a later
+default-size spawn can reuse one. (A retained `coro_rt_spawn_h` handle takes
+the ordinary path instead: `coro_rt_collect` releases the stack like
+`coro_destroy`.) Three consequences are part of the contract:
 
 - **A reused stack is not zeroed.** Within one process (one trust domain) a
   coroutine can read back bytes a previously finished coroutine left on the

@@ -25,7 +25,7 @@ coro_rt_destroy(rt);
 | `coro_rt_create(nthreads)` | 用 `nthreads` 个 OS worker 线程创建运行时(0 选硬件线程数,有上限;失败返回 NULL)。 |
 | `coro_rt_spawn(rt, attr, fn, arg)` | 创建协程并排队;它在稍后某个 worker 上开始,不在本次调用内运行。结束时运行时回收全部资源(句柄、栈、记账),调用方无需清理。`CORO_OK` / `CORO_EINVAL` / `CORO_ENOMEM`。同一运行时的提交不在内部串行化:多线程提交需在外部自行串行化;复用自运行时池的栈不保证零初始化([threading.zh-CN.md](../threading.zh-CN.md))。 |
 | `coro_rt_spawn_h(rt, attr, fn, arg, &out)` | 同上,另返回句柄以便手动管理该协程(查询、取消、join)。结束后用 `coro_rt_collect`(或 `coro_destroy`)释放。 |
-| `coro_rt_collect(rt, c)` | 回收受管 spawn:释放句柄、栈与记账。每个 `coro_rt_spawn_h` 恰好一次,如同手动协程的 `coro_destroy`。协程仍存活**或已结束但尚未 retire** 时返回 `CORO_EBUSY`——重试(在协程内先 yield;绝不空转)。可在 `coro_rt_destroy` 之后调用(该路径不触碰运行时)。默认分配器的栈会回到运行时上界受限的复用池而不是解除映射(自定义分配器句柄经其分配器释放)。 |
+| `coro_rt_collect(rt, c)` | 回收受管 spawn:释放句柄、栈与记账。每个 `coro_rt_spawn_h` 恰好一次,如同手动协程的 `coro_destroy`。协程仍存活**或已结束但尚未 retire** 时返回 `CORO_EBUSY`——重试(在协程内先 yield;绝不空转)。可在 `coro_rt_destroy` 之后调用(该路径不触碰运行时)。默认分配器的栈在此照常释放(解除映射),与 `coro_destroy` 相同;只有非 retained 的 retire 才把栈驻留进运行时的复用池(自定义分配器句柄经其分配器释放)。 |
 | `coro_rt_wait_all(rt)` | 运行时自身的排空:worker 持续调度,直到无可运行项、无待发定时器、无中途协程。停在永远等不到的唤醒上的协程会像阻塞 join 一样让运行时保持存活。 |
 | `coro_rt_join(rt, c)` | 把**调用它的运行时协程**停放至目标结束;一个目标上的多个等待者全部被释放,各自恰好恢复一次。普通线程或 join 自身句柄返回 `CORO_EAGAIN`;目标已结束(无论句柄是否已回收)返回 `CORO_EDESTROYED`;等待被取消且目标未结束返回 `CORO_ECANCELED`。 |
 | `coro_rt_pending(rt)` | 存活协程数(可运行 + 睡眠 + 阻塞,未结束)。为 0 表示运行时空闲、可以安全销毁。 |
