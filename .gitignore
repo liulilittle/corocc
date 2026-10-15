@@ -1,9 +1,7 @@
 build/
 build-*/
 .superpowers/
-.opencode/node_modules/
-.opencode/backups/
-.opencode/logs/
+.opencode/
 dist/
 dist-out/
 ci-logs/
