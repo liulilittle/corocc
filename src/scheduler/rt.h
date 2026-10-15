@@ -34,6 +34,7 @@
 
 #include <corocc/coro_rt.h>
 #include <corocc/coro.h>
+#include <corocc/coro_stack.h>
 
 #include "platform/coro_plat_locks.h"
 
@@ -103,6 +104,18 @@ void rt_node_wake(coro_rt_t* rt, rt_node* n);
    (typedef struct coro_rt coro_rt_t, line 40), included above; repeating the
    typedef here would be a typedef redefinition under strict C11-only
    toolchains, so the internal structure only completes the public tag. */
+/* Bounded per-runtime stack reclaim pool. A coroutine that finishes has its
+   stack parked here instead of unmapped on the retire path, so bursty
+   spawn/retire traffic pays neither the unmap nor the next mmap/mprotect;
+   a spawn pops a parked stack and builds the coroutine around it. Entries
+   are default-size (>= CORO_DEFAULT_STACK_SIZE) stacks of the built-in
+   allocator only. Bounded by entry count -- the pool defers at most this
+   many mappings, and coro_rt_destroy releases every parked stack. Override
+   with -DCOROCC_RT_STACK_CACHE_MAX=n. */
+#ifndef COROCC_RT_STACK_CACHE_MAX
+#define COROCC_RT_STACK_CACHE_MAX 256
+#endif
+
 struct coro_rt {
     rt_worker*      workers;
     size_t          nworkers;
@@ -114,6 +127,9 @@ struct coro_rt {
                                        finished retained handle no longer
                                        counts (atomic). */
     size_t          spawn_seq;    /**< round-robin spawn distribution. */
+    coro_plat_mutex_t cache_lock; /**< guards the stack reclaim pool below. */
+    coro_stack      cache[COROCC_RT_STACK_CACHE_MAX]; /**< parked stacks. */
+    size_t          cache_n;      /**< parked entries in use. */
 };
 
 #endif /* COROCC_SCHEDULER_RT_H */

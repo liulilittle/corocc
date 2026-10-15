@@ -17,6 +17,7 @@
  * API or ABI.
  */
 #include <corocc/coro.h>
+#include <corocc/coro_stack.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,30 @@ COROCC_API void coro_set_sched_tag(coro_t* c, void* tag);
  * @return The stored pointer, or NULL when nothing owns this handle.
  */
 COROCC_API void* coro_get_sched_tag(const coro_t* c);
+
+/**
+ * coro_create_on_stack -- create a coroutine around a caller-owned stack.
+ *
+ * The runtime's stack-reclaim pool hands back a stack retired earlier; this
+ * entry builds the handle and context around it without allocating. The
+ * ownership contract: on CORO_OK the coroutine owns the stack (destroy
+ * releases it like any default-allocator stack); on error the caller keeps
+ * the stack. Only valid when the attribute carries no custom allocator (a
+ * custom allocator owns its own memory and the pool never sees it).
+ */
+coro_status coro_create_on_stack(coro_t** out, const coro_attr_t* attr,
+                                 coro_fn fn, void* arg, coro_stack* stk);
+
+/**
+ * coro_destroy_to_stack -- destroy a coroutine, handing its stack back.
+ *
+ * The default-allocator counterpart of coro_destroy for the runtime's
+ * reclaim pool: instead of releasing the stack it is returned in *out for
+ * the caller to park or free. A handle created with a custom allocator is
+ * released exactly like coro_destroy and leaves *out zeroed. Same state
+ * gate as coro_destroy; *out is always zeroed first.
+ */
+coro_status coro_destroy_to_stack(coro_t* c, coro_stack* out);
 
 #ifdef __cplusplus
 }

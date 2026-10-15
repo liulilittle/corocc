@@ -38,6 +38,7 @@
 
 #include "arch/coro_atomic.h"
 #include "arch/coro_tls.h"
+#include "coroutine/coro_internal.h"
 #include "coroutine/coro_runtime.h"
 
 #include <stdlib.h>
@@ -191,6 +192,57 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
     }
     coro_at_store(&c->w, CORO_W_NEW);
     *out = c;
+    return CORO_OK;
+}
+
+/* Internal: build a coroutine handle around a stack the caller hands over
+   (the runtime's reclaim pool). Mirrors coro_create's default-allocator
+   path with the stack allocation replaced by the transfer. See
+   coro_internal.h for the ownership contract. */
+coro_status coro_create_on_stack(coro_t** out, const coro_attr_t* attr,
+                                 coro_fn fn, void* arg, coro_stack* stk) {
+    if (!out || !fn || !stk || !stk->base) return CORO_EINVAL;
+
+    coro_attr_t a = attr ? *attr : coro_attr_default();
+    if (a.flags != CORO_F_NONE) return CORO_EINVAL;
+    if (a.allocator) return CORO_EINVAL; /* the pool never serves these */
+
+    coro_t* c = (coro_t*)calloc(1, sizeof *c);
+    if (!c) return CORO_ENOMEM;
+    c->stack = *stk;
+    c->fn = fn;
+    c->arg = arg;
+    c->attr = a;
+    if (coro_ctx_init(&c->self, &c->stack, coro_entry, c) != 0) {
+        free(c);
+        return CORO_EINVAL; /* the stack stays the caller's */
+    }
+    coro_at_store(&c->w, CORO_W_NEW);
+    *out = c;
+    return CORO_OK;
+}
+
+/* Internal: the destroy path of the reclaim pool. Identical to coro_destroy
+   up to the release; the stack then goes to *out instead of being freed. A
+   handle created with a custom allocator is released through that allocator
+   exactly as coro_destroy does, and *out stays zeroed. */
+coro_status coro_destroy_to_stack(coro_t* c, coro_stack* out) {
+    if (!c || !out) return CORO_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (coro_current() == c) return CORO_EBUSY;
+
+    uint64_t cur = coro_at_load(&c->w);
+    if (cur == CORO_W_RUNNING || cur == CORO_W_SWITCHING) return CORO_EBUSY;
+    if (!coro_at_cas(&c->w, &cur, CORO_W_DEAD)) return CORO_EBUSY;
+
+    coro_ctx_destroy(&c->self);
+    if (c->attr.allocator) {
+        c->attr.allocator->free_stack(c->stack.base);
+        c->attr.allocator->free_handle(c);
+    } else {
+        *out = c->stack;
+        free(c);
+    }
     return CORO_OK;
 }
 

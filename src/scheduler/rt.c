@@ -114,6 +114,39 @@ void rt_node_wake(coro_rt_t* rt, rt_node* n) {
     signal_activity(rt);
 }
 
+/* ---- stack reclaim pool ---- */
+
+/* Park a retired stack; when the pool is full the stack is released the
+   normal way. Only stacks that can serve a default-size spawn are parked
+   (smaller custom sizes are freed outright), matching the request side,
+   which pops only for default-size spawns. */
+static void rt_stack_push(coro_rt_t* rt, coro_stack* stk) {
+    int stored = 0;
+    if (stk->usable < CORO_DEFAULT_STACK_SIZE) {
+        coro_stack_free(stk);
+        return;
+    }
+    coro_plat_mutex_lock(&rt->cache_lock);
+    if (rt->cache_n < COROCC_RT_STACK_CACHE_MAX) {
+        rt->cache[rt->cache_n++] = *stk;
+        stored = 1;
+    }
+    coro_plat_mutex_unlock(&rt->cache_lock);
+    if (!stored) coro_stack_free(stk);
+}
+
+/* Take one parked stack, or report the pool empty. */
+static int rt_stack_pop(coro_rt_t* rt, coro_stack* out) {
+    int got = 0;
+    coro_plat_mutex_lock(&rt->cache_lock);
+    if (rt->cache_n > 0) {
+        *out = rt->cache[--rt->cache_n];
+        got = 1;
+    }
+    coro_plat_mutex_unlock(&rt->cache_lock);
+    return got;
+}
+
 /* ---- worker queues ---- */
 
 /* A worker that owns an inbox turns every drained node into a deque entry. */
@@ -202,7 +235,13 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
     live_add(rt, -1);
     live_notify(rt);
     if (!retained) {
-        coro_destroy(n->coro);
+        /* Park the stack instead of unmapping it: the pool serves the next
+           spawn and coro_rt_destroy releases what is left. A handle with a
+           custom allocator is released in full (and yields no stack). */
+        coro_stack stk;
+        if (coro_destroy_to_stack(n->coro, &stk) == CORO_OK && stk.base) {
+            rt_stack_push(rt, &stk);
+        }
         free(n);
     }
 }
@@ -321,7 +360,9 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
        makes the absolute deadlines below share the timer heap's scale. */
 #if !defined(_WIN32)
     pthread_mutex_init(&rt->act_lock, NULL);
+    pthread_mutex_init(&rt->cache_lock, NULL);
 #endif
+    rt->cache_n = 0;
     coro_plat_cond_init(&rt->act_cond);
     coro_plat_cond_init(&rt->settled);
 
@@ -345,6 +386,7 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         pthread_cond_destroy(&rt->act_cond);
         pthread_cond_destroy(&rt->settled);
         pthread_mutex_destroy(&rt->act_lock);
+        pthread_mutex_destroy(&rt->cache_lock);
 #endif
         free(rt->workers);
         free(rt);
@@ -368,7 +410,18 @@ static coro_status rt_spawn_common(coro_rt_t* rt, const coro_attr_t* attr,
     rt_node* n = (rt_node*)calloc(1, sizeof *n);
     if (!n) return CORO_ENOMEM;
 
-    coro_status st = coro_create(&n->coro, attr, fn, arg);
+    /* Default-allocator spawns may reuse a parked stack (and then skip the
+       mmap/mprotect entirely); a custom allocator owns its memory and the
+       pool never sees it, so those spawns go straight to coro_create. */
+    coro_status st;
+    coro_stack stk;
+    if ((!attr || (!attr->allocator && attr->stack_size == 0)) &&
+        rt_stack_pop(rt, &stk)) {
+        st = coro_create_on_stack(&n->coro, attr, fn, arg, &stk);
+        if (st != CORO_OK) rt_stack_push(rt, &stk); /* caller keeps it */
+    } else {
+        st = coro_create(&n->coro, attr, fn, arg);
+    }
     if (st != CORO_OK) {
         free(n);
         return st;
@@ -585,10 +638,17 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
         coro_thread_join(rt->workers[i].thread);
         coro_timer_heap_destroy(&rt->workers[i].sleepers);
     }
+    /* Workers are stopped, so no retire can be pushing: release the parked
+       stacks the pool still holds. */
+    coro_plat_mutex_lock(&rt->cache_lock);
+    for (size_t i = 0; i < rt->cache_n; ++i) coro_stack_free(&rt->cache[i]);
+    rt->cache_n = 0;
+    coro_plat_mutex_unlock(&rt->cache_lock);
 #if !defined(_WIN32)
     pthread_cond_destroy(&rt->act_cond);
     pthread_cond_destroy(&rt->settled);
     pthread_mutex_destroy(&rt->act_lock);
+    pthread_mutex_destroy(&rt->cache_lock);
 #endif
     free(rt->workers);
     free(rt);
