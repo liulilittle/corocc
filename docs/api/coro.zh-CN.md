@@ -48,6 +48,16 @@ while (next != CORO_TOKEN_DEAD) {
 }
 ```
 
+## 常量
+
+| 名称 | 值 | 含义 |
+| --- | --- | --- |
+| `CORO_DEFAULT_STACK_SIZE` | 256 KiB(`262144`) | `attr->stack_size == 0` 时选用的可用栈大小;其下额外映射一个守护页。 |
+| `CORO_LOCAL_SLOTS` | `32` | 协程局部槽数量(`coro_local_get/set` 合法键为 `< CORO_LOCAL_SLOTS`)。 |
+| `CORO_F_NONE` | `0` | 目前 `coro_attr_t.flags` 唯一接受的值;任何其他位都以 `CORO_EINVAL` 拒绝。 |
+| `CORO_TOKEN_NONE` | `0` | 保留凭证值:"没有可报告的挂点"(也是出参在成功调用前的初值)。 |
+| `CORO_TOKEN_DEAD` | `UINT64_MAX` | 哨兵凭证:入口已返回,协程已死。 |
+
 ## 入口
 
 ### `coro_attr_t coro_attr_default(void)`
@@ -136,6 +146,23 @@ NULL 返回 `CORO_NEW` 而非崩溃。
 `CORO_EINVAL`;`coro_local_get` 对 NULL 返回 NULL。未写槽读出 NULL。此类调用不
 涉及状态字,永不平滑失败。
 
+### `size_t coro_pump(void)`
+
+清扫排队给调用线程队列的全部唤醒请求,返回服务数量(队列为空为 0)。该队列是
+"就地驱动协程"的线程级替代:当一次唤醒被寻址给拥有协程的线程而不是发给持凭证
+者时,请求落入此队列。每个排队请求都以内联 resume 所用的同一个 compare-and-swap
+认领一次,输掉认领的请求按被拒凭证丢弃,绝不会驱动协程两次。入口在清扫驱动中
+结束的协程发布 `CORO_TOKEN_DEAD`。非阻塞;需要服务已知数量请求的调用方应按
+"清扫次数"计数——一次清扫可能服务多个请求。
+
+### `size_t coro_pump_wait(void)`
+
+阻塞形式:在线程条件变量上睡眠(绝不轮询)直到有请求到达,然后像 `coro_pump`
+一样排空队列,返回本次排空服务数量。必须由所属线程调用。线程无事可做、只服务
+协程时用它;线程有自己的工作、只顺手清扫队列时用 `coro_pump`。投递给已退出
+线程的请求以 `CORO_EDESTROYED` 失败而非丢失(该线程的退出钩机会把残留请求
+全部置失败)。
+
 ## 跨线程驱动
 
 任何持有协程有效凭证的线程都可以驱动它。认领是状态字上的单次 compare-and-swap:
@@ -179,6 +206,8 @@ yield(以及入口返回哨兵)会把控制权交还给驱动当前这一轮运�
 * `coro_t` 为不透明句柄:布局在内部,不对外暴露。
 * `coro_token` 为 `uint64_t`;`coro_state`/`coro_status` 为枚举,取值稳定
   (`CORO_OK == 0`)。
+* `coro_attr_t` 与 `coro_allocator_t` 是完整可内嵌类型;两者在两种指针模型下的
+  实测布局与完整 ABI 契约见 [ABI.zh-CN.md](../ABI.zh-CN.md)。
 * 库为 C99 与 C++11 兼容;`coro.h` 不含任何第三方头。
 
 ## 实测成本

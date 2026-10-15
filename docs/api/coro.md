@@ -52,6 +52,16 @@ while (next != CORO_TOKEN_DEAD) {
 }
 ```
 
+## Constants
+
+| Name | Value | Meaning |
+| --- | --- | --- |
+| `CORO_DEFAULT_STACK_SIZE` | 256 KiB (`262144`) | Usable stack size selected when `attr->stack_size == 0`; one guard page is mapped below it. |
+| `CORO_LOCAL_SLOTS` | `32` | Number of coroutine-local slots (`coro_local_get/set` valid keys are `< CORO_LOCAL_SLOTS`). |
+| `CORO_F_NONE` | `0` | The only value accepted in `coro_attr_t.flags` today; any other bit is rejected with `CORO_EINVAL`. |
+| `CORO_TOKEN_NONE` | `0` | Reserved credential value: "no suspension to report" (also the initial value of an out-parameter before a successful call). |
+| `CORO_TOKEN_DEAD` | `UINT64_MAX` | Sentinel credential: the entry returned and the coroutine is dead. |
+
 ## Entry points
 
 ### `coro_attr_t coro_attr_default(void)`
@@ -155,6 +165,30 @@ and never touch `thread_local`. `key >= CORO_LOCAL_SLOTS` is rejected with
 returns NULL for them. Unset slots read NULL. No state word is involved, so
 these calls never block or fail on a live coroutine.
 
+### `size_t coro_pump(void)`
+
+Run every wakeup request waiting in the calling thread's queue and return how
+many were served (0 when the queue was empty). The queue is the per-thread
+alternative to driving a coroutine inline: requests land there when a wakeup
+is addressed to the thread that owns a coroutine rather than sent to whoever
+holds the credential. Each queued request is claimed once with the same
+compare-and-swap the inline resume uses, so a request that loses the claim is
+dropped as a rejected credential instead of driving the coroutine twice. A
+coroutine whose entry finishes during a pumped drive publishes
+`CORO_TOKEN_DEAD`. Non-blocking; a caller that must serve a known number of
+requests should count sweeps, because one sweep can serve many requests.
+
+### `size_t coro_pump_wait(void)`
+
+The blocking form: sleep on the thread's condition variable (never poll)
+until a request arrives, then drain the queue exactly like `coro_pump` and
+return how many requests the drain served. Must be called from the owning
+thread. Use it when the thread has nothing to do but serve coroutines; use
+`coro_pump` when the thread has its own work and only wants to sweep the
+queue. A request queued for a thread that has already exited fails with
+`CORO_EDESTROYED` instead of being lost (the thread's exit hook fails
+whatever is still queued).
+
 ## Driving from several threads
 
 Any thread that holds a coroutine's live credential may drive it. The claim is
@@ -210,6 +244,9 @@ whatever is still queued, so the requesting side is always released.
 * `coro_t` is an opaque handle: the layout is internal and never exposed.
 * `coro_token` is `uint64_t`; `coro_state` and `coro_status` are enumerations
   whose numeric values are stable (`CORO_OK == 0`).
+* `coro_attr_t` and `coro_allocator_t` are complete embeddable types; their
+  measured layouts (both pointer models) and the full ABI contract are in
+  [ABI.md](../ABI.md).
 * The library is C99 and C++11 compatible; `coro.h` includes no third-party
   header.
 
