@@ -15,8 +15,7 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
-LOG_DIR="${LOG_DIR:-$ROOT/.opencode/logs}"
-export LOG_DIR="$LOG_DIR/ci"
+export LOG_DIR="${LOG_DIR:-$ROOT/ci-logs}"
 
 ONLY=""
 while [ $# -gt 0 ]; do

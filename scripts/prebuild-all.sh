@@ -10,14 +10,14 @@
 # skipped; the release/reference archs are always built.
 #
 # Environment:
-#   LOG_DIR   log directory        (default .opencode/logs)
+#   LOG_DIR   log directory        (default ci-logs)
 #   DIST_DIR  staging directory    (default dist)
 #   WITH_CLANG also prebuild a native clang variant (default: yes)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
-LOG_DIR="${LOG_DIR:-$ROOT/.opencode/logs}"; mkdir -p "$LOG_DIR"
+LOG_DIR="${LOG_DIR:-$ROOT/ci-logs}"; mkdir -p "$LOG_DIR"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 WITH_CLANG="${WITH_CLANG:-yes}"
 

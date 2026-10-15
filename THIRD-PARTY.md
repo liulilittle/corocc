@@ -28,8 +28,7 @@ The origin, version, and license of each are recorded below.
     attribution is kept in the file header.
 - **Upstream project:** Boost.Context (part of Boost).
 - **Version:** 1.83.0 (tag `boost-1.83.0`, commit
-  `65b179db288d13da21447e4f430400338ce08ca2`; per-file upstream blob SHAs and
-  local sha256 sums are recorded in `.opencode/logs/isa/exec/W1-ledger.txt`).
+  `65b179db288d13da21447e4f430400338ce08ca2`).
 - **License:** Boost Software License 1.0 (BSL-1.0).
   Full text: <https://www.boost.org/LICENSE_1_0.txt>
 - **Compatibility:** BSL-1.0 is a permissive, OSI-approved license that is

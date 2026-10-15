@@ -9,42 +9,52 @@ guard-page stacks that turn overflow into a hard fault instead of silent
 memory corruption, and zero warnings under `-Wall -Wextra -Werror`
 (`/W4 /WX` on MSVC) for all first-party code.
 
-## Status
+## Overview
 
-Milestone 1 (skeleton + L0 execution contexts) is complete:
-
-| Area | State |
+| Area | What you get |
 | --- | --- |
-| Layers | L0-L3 implemented: context primitives (`coro_stack`, `coro_ctx`), coroutine objects, the M:N work-stealing runtime with synchronization primitives, and the structured-concurrency scope layer; the header-only C++11 wrapper (`coro.hpp`, M8) and the Windows (MSVC) port (M9) have landed |
-| Architectures | 17 context-switch backends vendored: x86_64 (SysV), i386, aarch64/aarch64_be, arm32/armeb, MIPS o32/n32/n64 in both endiannesses, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64; the qemu-user cross matrix is green on every ABI (see `scripts/README.md`) |
+| Layers | L0 context primitives (`coro_stack`, `coro_ctx`), L1 coroutine objects with the token credential protocol, the L2 M:N work-stealing runtime with synchronization primitives (mutex, condition variable, semaphore, rwlock, channel), the L3 structured-concurrency scope layer, a single-thread scheduler, and a header-only C++11 wrapper (`coro.hpp`) |
+| Architectures | Native x86_64 (SysV ELF and MSVC PE/MASM) plus 17 cross-compiled ABIs: i386, aarch64/aarch64_be, arm32/armeb, MIPS o32/n32/n64 in both endiannesses, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64; every cross ABI builds and runs its test suite under QEMU user-mode emulation (`scripts/README.md`) |
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
-| Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`); clean under ASan, including stack-use-after-return detection |
+| Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`), including stack-use-after-return detection; a ThreadSanitizer suite covers the runtime's delivery queue, identity registry and atomics |
 | Boost coexistence | Symbol-renamed assembly coexists with real Boost.Context in one binary (`boost_coexist` test) |
-| Toolchain | GCC, Clang, MSVC and cross builds via CMake toolchain files |
+| Toolchain | GCC, Clang, MSVC (x64) and cross builds via CMake toolchain files; Android NDK compile support |
+| Distribution | Per-triple prebuilt static-library archives on tagged releases, with a CMake config package and a zero-dependency consumer example |
 
 ## Requirements
 
-- CMake >= 3.16, Ninja or Make, a C99 and C++11 compiler.
+- CMake >= 3.16, Ninja or Make, and a C99/C++11 compiler (GCC, Clang or MSVC).
+- Optional: Boost.Context headers and library, for the coexistence test.
 - To run cross-target binaries on an x86_64 host: the `qemu-user` emulator for
-  that ISA plus the matching cross toolchain + sysroot. `scripts/build-all.sh`
-  covers all 17 ABIs; the canonical aarch64 flow is shown below.
-- Optional: Boost.Context headers/library, for the coexistence test.
+  that ISA plus the matching cross toolchain and sysroot.
+  `scripts/build-all.sh` covers all 17 cross targets; the aarch64 flow below
+  is the canonical example.
 - No other dependencies.
 
 ## Layout
 
 ```
 include/corocc/    public headers (C99, C++11-clean): coro_status.h,
-                   coro_stack.h, coro_ctx.h
-src/coroutine/     implementation: status.c, stack.c, ctx.c
-src/arch/          vendored Boost.Context assembly, symbols renamed
-toolchain/         cross-compilation toolchain files
-tests/             unit tests, the boost-coexistence test, the benchmark
+                   coro_stack.h, coro_ctx.h, coro.h, coro_rt.h,
+                   coro_sched.h, coro_scope.h, and the wrapper coro.hpp
+src/coroutine/     L0/L1 implementation: status.c, stack.c, ctx.c, coro.c,
+                   coro_runtime.c (per-thread driver state and wakeup queue)
+src/scheduler/     single-thread run loop (sched.c), the M:N work-stealing
+                   runtime (rt.c, rt_sync.c, rt_scope.c, timer.c, wsdeque.c,
+                   mpsc.c)
+src/platform/      threads, locks and condition waits (POSIX/Win32)
+src/arch/          context-switch backends (vendored Boost.Context assembly,
+                   symbols renamed) plus atomics/TLS/ABI headers
+cmake/             arch_select.cmake: per-architecture source selection
+toolchain/         canonical cross-compilation toolchain file (aarch64)
+scripts/           build/test/cross/prebuild entry points (scripts/README.md)
+tests/             unit, C++ (cpp/), concurrency and performance suites
+perf/              M:N runtime and pure-switch benchmarks
 ```
 
 ## Build and test
 
-### Native (x86_64)
+### Native
 
 ```sh
 cmake -S . -B build -G Ninja
@@ -52,9 +62,14 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Expected: `8/8 tests passed` — `smoke`, `stack`, `ctx`, `ctx_return`,
-`ctx_pingpong`, `ctx_overflow`, `ctx_asan`, and `boost_coexist` (the last
-only when Boost.Context is installed).
+Expected: every registered test passes. The suite count depends on the
+platform and build type: a plain Linux build registers 43 CTest entries,
+`+1` with Boost.Context installed (the `boost_coexist` test), `+1` in a
+Release build (the `cpp_perf` throughput gate), and `-1` on Windows (the
+POSIX-only `conc_runtime_tsan` suite is not registered there). The suites
+cover context switching and guard-page overflow, the coroutine credential
+protocol, the single-thread scheduler, the M:N runtime and its primitives,
+the scope layer and the C++11 wrapper.
 
 ### AddressSanitizer build
 
@@ -81,30 +96,46 @@ ctest --test-dir build-arm64 --output-on-failure
 ```
 
 The benchmark ping-pongs between two contexts (two switches per iteration)
-and reports nanoseconds per switch. Reference measurements from the project's
-Linux CI host: about **10-11 ns/switch** natively on x86_64 (GCC, Ninja), and
-about **50-60 ns/switch** for aarch64 under `qemu-aarch64` user-mode emulation
-(emulation overhead included; the figure moves with host load).
+and reports nanoseconds per switch. Reference figures (Linux x86_64, GCC,
+Ninja): about **10-11 ns/switch** natively, and about **50-60 ns/switch** for
+aarch64 under `qemu-aarch64` user-mode emulation (emulation overhead
+included; the figure moves with host load).
 
 ## Prebuilt artifacts (zero-build consumption)
 
-Every tag is built by GitHub Actions (`.github/workflows/release.yml`), which
-packs the precompiled static library together with the public headers into
-per-triple archives attached to the GitHub Release, for example
-`corocc-x86_64-unknown-linux-gnu-linux.tar.gz`.
+Each tagged release is built by the release workflow
+(`.github/workflows/release.yml`), which packs the precompiled static library,
+the public headers, a CMake config package and a consumer example into
+per-triple archives attached to the GitHub Release, alongside a flat
+`SHA256SUMS` file. Linux archives are named `corocc-<tag>-<triple>.tar.gz`;
+the Windows archive is `corocc-<tag>-x86_64-pc-windows-msvc.zip`.
 
 ```sh
-tar xzf corocc-aarch64-unknown-linux-gnu-linux.tar.gz
-cc your_app.c \
-    -Iaarch64-unknown-linux-gnu/include \
-    aarch64-unknown-linux-gnu/lib/libcorocc.a
+tar xzf corocc-<tag>-aarch64-unknown-linux-gnu.tar.gz
+cc your_app.c -Iaarch64-unknown-linux-gnu/include \
+              aarch64-unknown-linux-gnu/lib/libcorocc.a
 ```
 
 No configure or build step is needed: download, point the compiler at the
-bundled `include` and `lib`, done. The set of published triples grows with the
-architectures that have a vendored context-switch backend; `scripts/README.md`
-carries the current status matrix, and `scripts/prebuild-all.sh` produces the
-same layout locally.
+bundled `include` and `lib`, done. An archive can also be consumed directly
+by CMake through the bundled config package:
+
+```sh
+cmake -S aarch64-unknown-linux-gnu/examples/cmake-consumer -B build \
+      -DCMAKE_PREFIX_PATH="$PWD/aarch64-unknown-linux-gnu"
+cmake --build build
+```
+
+Linux triples published this way: `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, `arm-linux-gnueabihf`,
+`i386-unknown-linux-gnu`, `mips-unknown-linux-gnu`,
+`mipsel-unknown-linux-gnu`, `mips64-unknown-linux-gnuabi64`,
+`mips64el-unknown-linux-gnuabi64`, `powerpc-unknown-linux-gnu`,
+`powerpc64-unknown-linux-gnu`, `powerpc64le-unknown-linux-gnu`,
+`s390x-unknown-linux-gnu` and `riscv64-unknown-linux-gnu`. The Windows
+archive is `x86_64-pc-windows-msvc`.
+
+`scripts/prebuild-all.sh` produces an equivalent local layout under `dist/`.
 
 ## Using the L0 API
 
@@ -166,14 +197,22 @@ int main(void) {
 Every suspension point publishes a unique token: presenting it is what wakes a
 coroutine, a stale token is rejected, and no scheduler is required. Cancellation
 is cooperative (`coro_cancel`), values that must survive suspension live in
-coroutine-local slots (`coro_local_get/set`), and a coroutine belongs to the
-thread that first drove it. The full contract, the state-word encoding and the
-measured costs are documented in [docs/api/coro.md](docs/api/coro.md).
+coroutine-local slots (`coro_local_get/set`), and a coroutine's custom stack
+and handle allocator can be supplied per coroutine (`coro_attr_t.allocator`).
+The full contract, the state-word encoding and the measured costs are
+documented in [docs/api/coro.md](docs/api/coro.md).
 
-## L2 runtime primitives
+## L2 runtime (M:N scheduling and synchronization)
 
-The M:N runtime also ships a writer-preferring reader/writer lock and a FIFO
-channel, both embeddable by value and zero-initialized:
+`coro_rt_t` is a work-stealing M:N runtime. `coro_rt_create(n)` starts `n`
+worker threads; `coro_rt_spawn`/`coro_rt_spawn_h` submit coroutines (the
+managed form reports a handle you collect with `coro_rt_collect`);
+`coro_rt_join` parks the caller until a coroutine finishes; `coro_rt_wait_all`
+drains the runtime; `coro_rt_sleep`, `coro_rt_yield` and `coro_rt_cancel`
+provide cooperative timing and cancellation. Alongside the runtime come its
+synchronization primitives, all embeddable by value and zero-initialized: a
+mutex, a condition variable, a counting semaphore, a writer-preferring
+reader/writer lock and a FIFO channel — the lock and channel are shown here:
 
 ```c
 #include <corocc/coro_rt.h>
@@ -202,8 +241,9 @@ int main(void) {
 outside a runtime coroutine, `CORO_ESTATE` for an unlock with no matching hold
 and `CORO_ECANCELED` when a wait is cut short. The channel reports
 `CORO_EBUSY` for a full `trysend` or an empty `tryrecv`, and `CORO_ECLOSED`
-once it is closed and drained. A full contract lives in the headers under
-`include/corocc/coro_rt.h`.
+once it is closed and drained. The full contracts live in the headers under
+`include/corocc/coro_rt.h`; the lock and channel are also documented in
+[docs/api/coro_rt.md](docs/api/coro_rt.md).
 
 ## Structured concurrency (L3)
 
@@ -234,32 +274,32 @@ request only when its event happens, and children waiting on each other under
 a full cancel may keep a wait alive. The full contract, the state machine and
 the watchdog design live in [docs/api/coro_scope.md](docs/api/coro_scope.md).
 
-## Multithreading
+## Driving from several threads
 
-A coroutine belongs to the thread that first drove it. A wakeup requested from
-any other thread is *delivered* to that owner: the request is queued and the
-requesting thread waits for the result the owner records, so no coroutine is
-ever entered by a thread that does not belong to it.
+A coroutine is driven from the thread that presents its live credential. The
+claim is a single compare-and-swap on the state word: when several threads
+race for the same credential, exactly one wins and enters the coroutine; every
+other caller receives `CORO_EBUSY` or `CORO_ESTALE` and the coroutine is
+untouched. A yield returns to whichever thread drove the current run, so
+handing a coroutine to another thread is just a matter of handing over its
+credential.
 
 ```c
-/* thread A (the owner): parks in coro_pump_wait until work arrives */
-coro_pump_wait();          /* sleeps, then serves every queued request */
-
-/* thread B: asks for a wakeup -- delivered to A, and A runs it */
+/* any thread holding the live token may drive: */
 coro_token next = CORO_TOKEN_NONE;
-coro_status s = coro_resume(worker, tok, &next);   /* waits for A's result */
+coro_status s = coro_resume(worker, tok, &next);   /* one claim, one drive */
 ```
 
-`coro_pump` sweeps the queue without blocking (useful when the owner has its own
-work) and returns how many requests it served; `coro_pump_wait` sleeps first.
-Because one sweep can serve many requests, callers that must serve a fixed
-number should count what both return. A request queued for an owner that has
-left fails with `CORO_EDESTROYED` instead of being lost.
-
-Migrating a coroutine to another thread (rather than delivering to its owner)
-is not provided yet: it needs the scheduler's work-stealing structures and
-arrives with that milestone. See [docs/api/coro.md](docs/api/coro.md) for the
-full cross-thread contract and the concurrency test matrix.
+Because coroutine-local slots live on the coroutine rather than on the
+thread, they move with it. Threads that own a set of coroutines can also
+serve a per-thread wakeup queue: `coro_pump` sweeps the calling thread's
+queued requests without blocking and returns how many it served;
+`coro_pump_wait` sleeps until a request arrives and then sweeps. Because one
+sweep can serve many requests, callers that must serve a fixed number should
+count what both return. A request queued for a thread that has already left
+fails with `CORO_EDESTROYED` instead of being lost. The full cross-thread
+contract and the concurrency verification matrix are in
+[docs/api/coro.md](docs/api/coro.md).
 
 ## The C++11 wrapper (header-only)
 
@@ -303,29 +343,26 @@ is in [docs/api/coro_cpp.md](docs/api/coro_cpp.md).
 
 ## Known limitations
 
-- **Scope:** the L0-L3 layers ship today (context primitives, coroutine
-  objects with the token credential protocol, the M:N work-stealing runtime
-  with its synchronization primitives and the structured-concurrency scope
-  layer), together with the header-only C++11 wrapper (`coro.hpp`, M8) and
-  the Windows (MSVC) port (M9). The IO loop is a follow-up milestone.
-- **Architectures:** all 17 backends are vendored, wired into the build and
-  green under qemu-user (i386, arm32/armeb, MIPS o32/n32/n64 little- and
-  big-endian, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64, aarch64/aarch64_be);
-  Windows (MSVC x64) is covered natively. Toolchain files and the per-ABI
-  runner: `scripts/README.md`, `scripts/ci/build-test.sh`.
-- **Threading:** a `coro_ctx` is not thread-safe — it must be swapped from a
-  single thread at a time (no internal locks by design at this layer).
+- **I/O:** there is no asynchronous I/O completion loop; coroutines park on
+  timers and synchronization primitives, not on file or socket readiness.
+- **Manual-layer join:** `coro_join` never blocks -- it reports `CORO_EAGAIN`
+  while the coroutine is live, and the caller drives it to completion. The
+  blocking form lives in the runtime layer (`coro_rt_join`).
+- **Threading:** a single `coro_ctx` swap pair is not thread-safe by itself:
+  it must be swapped from one thread at a time. The L1 claim guarantees this
+  for whole coroutines (see [docs/api/coro.md](docs/api/coro.md)).
 - **Exceptions:** `coro_ctx_swap` must not be used to propagate C++
   exceptions across a context boundary.
 - **TLS in coroutines on s390x:** do not rely on `thread_local` (TLS)
-  variables inside coroutine bodies on s390x — gcc caches the thread pointer
+  variables inside coroutine bodies on s390x -- gcc caches the thread pointer
   in a callee-saved register that context switching restores across threads,
-  so the cached value can be stale after a switch (the s390x build therefore
-  also uses `-fno-stack-protector`). The general `thread_local` contract is in
-  [docs/api/coro.md](docs/api/coro.md); the s390x specifics are in
-  `.opencode/logs/isa/exec/S390X-TLS-note.md`. Other ABIs are unaffected.
-- **Cross-build tests:** the Boost-coexistence test is only registered for
-  native builds.
+  so the cached value can be stale after a switch. The s390x toolchain file
+  therefore compiles with `-fno-stack-protector` (the stack-protector canary
+  would read the same cached pointer). Other ABIs are unaffected; the general
+  `thread_local` contract is in [docs/api/coro.md](docs/api/coro.md).
+- **Cross-build tests:** the Boost-coexistence test is registered for native
+  builds only (a cross build would link the host's Boost objects into a
+  foreign-architecture binary).
 
 ## License
 

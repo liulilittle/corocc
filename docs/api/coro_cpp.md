@@ -59,8 +59,8 @@ Build rules that are part of the contract:
 - **Object lifetime <= runtime/scheduler.** `task`/`scope` operations that
   touch runtime internals (`cancel`, `join`, `wait` on a live target) must
   happen before the owning runtime/scheduler is destroyed. The one exception
-  is `coro_rt_collect` after destroy (D25/V4), which the wrapper's closeout
-  may reach only for a target that already finished.
+  is `coro_rt_collect` after destroy, which the wrapper's closeout may reach
+  only for a target that already finished.
 - Destructors **drain**: `runtime`/`scheduler` do `wait_all()` then
   `destroy()`; `scope` does `cancel()` + `wait()` + `destroy()`; `task`
   cancels an unfinished target and collects it. A drain can be unbounded -- a

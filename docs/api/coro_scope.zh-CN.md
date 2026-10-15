@@ -6,9 +6,8 @@
 该 scope 接纳过的每一个子协程都已结束并完成回收之后,才报告完成。
 
 头文件为 `include/corocc/coro_scope.h`,实现位于
-`src/scheduler/rt_scope.c`。scope 对象是完整类型、可按值内嵌;零初始化即
-OPEN 态(定案 §3.8;设计草案的"不透明 typedef"被取代——零初始化必须可用,
-调用方必须能按值声明该对象)。
+`src/scheduler/rt_scope.c`。scope 对象是完整类型、可按值内嵌:零初始化即
+OPEN 态,调用方可以直接声明该对象。
 
 ## 概念
 
@@ -128,7 +127,6 @@ int main(void) {
 ## 模型说明
 
 - 只有一把锁:scope 复用运行时的 act_lock;状态字是 scope 上唯一的原子。
-  L3 未新增任何运行时内部件。
 - 结果单元的唯一写者是 scope 安装的 trampoline;被取消的子报告自己的最终值
   (约定为 `CORO_ECANCELED`),聚合读取的正是该值。不存在 EBUSY 哨兵:子合法
   返回 `CORO_EBUSY` 不会被曲解。

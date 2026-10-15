@@ -6,9 +6,8 @@ This document is the API and ABI reference for `coro.h`, the coroutine object
 layer of corocc. It covers every entry point's contract, the layout the
 library relies on, and the guarantees the credential protocol provides.
 
-Status: **milestone M2**. The coroutine object works without a runtime layer;
-the M:N scheduler, blocking primitives and the C++ wrapper build on exactly
-these entry points.
+The coroutine object works without a runtime layer; the M:N scheduler, the
+blocking primitives and the C++ wrapper build on exactly these entry points.
 
 ## Concepts
 
@@ -17,7 +16,7 @@ these entry points.
 | `coro_t` | Opaque handle to a scheduling entity: one state machine plus one execution context (stack + saved frame). |
 | Credential / token | A `coro_token` value published by every suspension point. Only its holder may resume the coroutine. |
 | Claim | The single compare-and-swap that grants permission to drive a coroutine. Losing it is reported, never retried. |
-| Driver / owner | The thread that drives a coroutine. The thread that first drives it owns it (see Ownership). |
+| Driver | The thread that drives a coroutine. Any thread holding the live credential may drive; the claim is a single compare-and-swap (see Driving from several threads). |
 | Resumer | The context the coroutine returns to when it yields or its entry returns. |
 
 ## The state word
@@ -85,7 +84,7 @@ called exactly once per `coro_create`, like `free()` on a pointer.
 * Failure: `CORO_EBUSY` (running, mid-switch, or the state changed under the
   caller); `CORO_EINVAL` for NULL. Nothing is released on failure.
 * Threading: callable from any thread that can see the handle, provided the
-  coroutine is not running; it does not require ownership.
+  coroutine is not running; no particular thread is required.
 
 ### `coro_state coro_get_state(const coro_t* c)`
 
@@ -99,10 +98,9 @@ parks or finishes.
 
 * On success `*next` receives the credential of the suspension point, or
   `CORO_TOKEN_DEAD` when the entry returned. Written only on success.
-* Failure: `CORO_EINVAL` (NULL arguments); `CORO_EBUSY` (running/mid-switch, or
-  another thread owns the coroutine — see Ownership); `CORO_ESTALE` (already
-  started and parked: resume it with the token you were given instead);
-  `CORO_EDESTROYED` (dead).
+* Failure: `CORO_EINVAL` (NULL arguments); `CORO_EBUSY` (running or
+  mid-switch); `CORO_ESTALE` (already started and parked: resume it with the
+  token you were given instead); `CORO_EDESTROYED` (dead).
 
 ### `coro_status coro_resume(coro_t* c, coro_token tok, coro_token* next)`
 
@@ -113,8 +111,7 @@ published.
   failure the coroutine is untouched and the caller sees why:
   `CORO_EINVAL` (NULL, or `tok` is not a credential), `CORO_EDESTROYED`
   (`CORO_TOKEN_DEAD`, or the state word says dead), `CORO_ESTALE` (a stale or
-  never-issued token), `CORO_EBUSY` (running/mid-switch, or another thread owns
-  the coroutine).
+  never-issued token), `CORO_EBUSY` (running or mid-switch).
 * Exactly one holder of a token can claim it: after a successful resume the
   token is consumed and presenting it again fails with `CORO_ESTALE`.
 * Settle-after-return: the next credential is published only after the switch
@@ -144,10 +141,10 @@ Returns `CORO_OK`, or `CORO_EINVAL` for NULL.
 
 ### `coro_status coro_join(coro_t* c)`
 
-Reports whether the coroutine is dead. With no runtime layer there is nothing
-to park the caller in and this contract never spins waiting, so a live
-coroutine yields `CORO_EAGAIN`; drive it to completion and join afterwards. A
-blocking join ships with the scheduler. `CORO_EINVAL` for NULL.
+Reports whether the coroutine is dead. The manual layer has nothing to park
+the caller in and this contract never spins waiting, so a live coroutine
+yields `CORO_EAGAIN`; drive it to completion and join afterwards. The blocking
+form is provided by the runtime layer (`coro_rt_join`). `CORO_EINVAL` for NULL.
 
 ### `void* coro_local_get(const coro_t* c, size_t key)` / `coro_status coro_local_set(coro_t* c, size_t key, void* val)`
 
@@ -158,32 +155,31 @@ and never touch `thread_local`. `key >= CORO_LOCAL_SLOTS` is rejected with
 returns NULL for them. Unset slots read NULL. No state word is involved, so
 these calls never block or fail on a live coroutine.
 
-## Ownership
+## Driving from several threads
 
-The thread that first drives a coroutine owns it, and only the owner may drive
-it. A start or resume from another thread is *delivered*: the request is queued
-for the owner and the requesting thread waits for the result the owner recorded.
-Nothing switches stacks on the requesting thread, so no coroutine can ever be
-entered by a thread that does not belong to it, and no thread can be left
-holding a reference to another thread's stack.
+Any thread that holds a coroutine's live credential may drive it. The claim is
+a single compare-and-swap on the state word, so when several threads present
+the same credential at once, exactly one of them wins and enters the
+coroutine; every other caller is told why (`CORO_EBUSY` for a running or
+mid-switch coroutine, `CORO_ESTALE` for a stale credential) and the coroutine
+is untouched.
 
-`coro_pump` sweeps the owner's queue and returns how many requests it served;
-`coro_pump_wait` sleeps until a request arrives and then sweeps. Both must be
-called from the owning thread, and both are safe to call at any time. A caller
-that must serve a known number of requests should count what both return,
-because one sweep can serve many requests at once.
+A yield (and the entry-return sentinel) returns control to whichever thread
+drove the current run: the drive path records the resumer, so handing a
+coroutine to another thread is just a matter of handing over its credential.
+There is no owner field and no separate migration entry point, because none is
+needed; the coroutine-local slots travel with the coroutine.
 
-Delivering a wakeup to a coroutine whose owner has left fails with
-`CORO_EDESTROYED` rather than being lost: the owner's exit hook fails whatever
-is still queued, so the requesting thread is always released.
+Threads that want to process wakeup requests on a chosen thread can use the
+per-thread wakeup queue. `coro_pump` sweeps the calling thread's queued
+requests and returns how many it served; `coro_pump_wait` sleeps until a
+request arrives and then sweeps. Both are safe to call at any time, and a
+caller that must serve a known number of requests should count what both
+return, because one sweep can serve many requests at once.
 
-### Migrating a coroutine to another thread
-
-Not provided in this milestone. The alternative to delivery is a *migration*:
-claim the coroutine, become its new owner and run it here. That needs the
-scheduler's work-stealing structures to keep the coroutine's state coherent
-across the move, so it arrives with the runtime milestone. `coro.h` documents
-this as a known gap rather than pretending the delivery path covers it.
+A request queued for a thread that has already left fails with
+`CORO_EDESTROYED` rather than being lost: the thread's exit hook fails
+whatever is still queued, so the requesting side is always released.
 
 ## Thread safety summary
 
@@ -192,9 +188,9 @@ this as a known gap rather than pretending the delivery path covers it.
 | `coro_create` | Concurrent for distinct handles. |
 | `coro_destroy` | Any thread; refuses a running coroutine. |
 | `coro_get_state`, `coro_join`, `coro_cancel`, `coro_local_*` | Any thread holding the handle. |
-| `coro_start`, `coro_resume` | Owner thread drives directly; a foreign thread's request is delivered to the owner and the caller waits for the result. Concurrent claims are resolved by a single compare-and-swap either way. |
-| `coro_yield` | Owner thread only; it transfers control back to its resumer. |
-| `coro_pump`, `coro_pump_wait` | Owner thread only; concurrent enqueues are serialised by the queue's lock. |
+| `coro_start`, `coro_resume` | Any thread holding the credential; concurrent claims are resolved by a single compare-and-swap, so one winner drives and the others see `CORO_EBUSY`/`CORO_ESTALE`. |
+| `coro_yield` | Inside the running coroutine; transfers control back to the drive path that resumed it. |
+| `coro_pump`, `coro_pump_wait` | Any thread that serves a wakeup queue (typically the thread the coroutines belong to); concurrent enqueues are serialised by the queue's lock. |
 
 ## Guarantees
 
@@ -205,7 +201,7 @@ this as a known gap rather than pretending the delivery path covers it.
   leave the state word, the credential and the stack untouched, so calls can be
   retried or routed elsewhere.
 * **Overflow stays fatal**: the guard page turns a stack overflow into a fault
-  instead of silent corruption (see the L0 documentation).
+  instead of silent corruption.
 * **Entry return is safe**: returning from the entry function returns control to
   the last resumer; the process never exits.
 
@@ -219,10 +215,10 @@ this as a known gap rather than pretending the delivery path covers it.
 
 ## Measured cost
 
-Figures below are from the project's Linux CI host (x86_64, GCC, Ninja,
-`tests/perf/bench_coro.c`). They are indicative, not contractual: absolute
-numbers move with the machine, and the lifecycle figure is dominated by mapping
-and first-touching a 256 KiB guarded stack.
+Reference figures (Linux x86_64, GCC, Ninja, `tests/perf/bench_coro.c`). They
+are indicative, not contractual: absolute numbers move with the machine, and
+the lifecycle figure is dominated by mapping and first-touching a 256 KiB
+guarded stack.
 
 | Measurement | Value |
 | --- | --- |
@@ -239,12 +235,9 @@ The concurrency suites live in `tests/concurrency/`:
 | `test_conc_double_resume` | At most one execution flow enters a suspension point when several threads present one credential, over a fixed-seed 200-round delivery stress. | native, ASan, aarch64/QEMU |
 | `test_conc_runtime_tsan` | The delivery queue, identity registry and atomics are race-free, from several threads at once. | ThreadSanitizer (CI) |
 
-ThreadSanitizer cannot follow a stack switch performed by assembly, so the drive
-path is not instrumentable and the concurrency work is split into an
-instrumentable part and a behavioural part. The behavioural part -- exactly-once,
-rejection codes, a coroutine left drivable -- runs in every other job.
-
-The TSan job does not run on the project's WSL image (ThreadSanitizer itself
-aborts there, with a minimal pthread program failing identically), so it is
-verified by CI and recorded as not locally verified; `scripts/ci-local.sh` says
-so rather than claiming a pass.
+ThreadSanitizer cannot follow a stack switch performed by assembly, so the
+drive path itself is not instrumentable. The concurrency verification is
+therefore split into an instrumentable part (the delivery queue, the identity
+registry and the atomics, exercised by the TSan suite) and a behavioural part
+(the exactly-once claim, the rejection codes, a coroutine left drivable), which
+runs in the ordinary suites on every platform.

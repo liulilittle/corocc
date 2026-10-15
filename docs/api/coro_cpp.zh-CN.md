@@ -49,8 +49,8 @@ API **平行**:只增加 RAII 所有权、类型化结果、chrono 时间与异�
   指向它的回指)。
 - **对象寿命 ≤ 其 runtime/scheduler**:触碰 runtime 内部的 `task`/`scope`
   操作(`cancel`、活目标的 `join`/`wait`)必须先于 runtime/scheduler 析构。
-  唯一例外是 destroy 之后的 `coro_rt_collect`(D25/V4),包装层的收口路径
-  只对"已完成"目标触碰它。
+  唯一例外是 destroy 之后的 `coro_rt_collect`,包装层的收口路径只对
+  "已完成"目标触碰它。
 - 析构一律 **drain**:`runtime`/`scheduler` 执行 `wait_all()` + `destroy()`;
   `scope` 执行 `cancel()` + `wait()` + `destroy()`;`task` 取消失败目标并
   收口。drain 可能无界——永远跑不起来的子会让它阻塞(`scheduler` 析构遇

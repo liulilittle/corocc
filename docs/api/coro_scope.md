@@ -8,9 +8,8 @@ once every child the scope ever accepted has finished and been collected.
 
 The header is `include/corocc/coro_scope.h`; the implementation lives in
 `src/scheduler/rt_scope.c`. The scope object is complete and embeddable by
-value; a zero-initialized scope is the OPEN state (verdict section 3.8,
-replacing the design draft's opaque typedef: zero-initialization must be a
-usable state, so the caller must be able to declare the object).
+value: zero-initialization is a usable state (OPEN), so the caller can declare
+the object directly.
 
 ## Concepts
 
@@ -141,7 +140,7 @@ thread uses its own deadline wait -- no watchdog coroutine is spawned there.
 ## Model notes
 
 - One lock only: the scope reuses the runtime's activity lock; the state word
-  is the only atomic on the scope. No new runtime internals were added for L3.
+  is the only atomic on the scope.
 - The result cell's single writer is the trampoline the scope installs; a
   cancelled child reports its own final value (conventionally
   `CORO_ECANCELED`) and the aggregation reads exactly that value. There is no

@@ -7,9 +7,10 @@ the M:N work-stealing runtime: a writer-preferring reader/writer lock
 (`coro_rt_rwlock`) and a FIFO channel (`coro_rt_channel`). Both live in
 `coro_rt.h` together with the runtime itself.
 
-Status: **milestone M5**. The mutex, condition variable and counting semaphore
-that ship with M4 use the same wait-chain protocol; this document covers only
-the two primitives added in M5.
+The coroutine mutex, condition variable and counting semaphore declared in the
+same header use the same wait-chain protocol; this document covers the two
+primitives the header documents at length, the reader/writer lock and the
+channel.
 
 ## Concepts
 
@@ -134,8 +135,8 @@ and must not be touched directly.
   reader storm cannot starve a writer.
 - No lost handoff: a grant handed to a waiter that is cancelled is retried by
   that waiter before it abstains, so no waiter is stranded and no slot is lost.
-- No lost wake: the check-and-park sequence and the release-queeue sequence run
-  under the same lock, and every wake happens outside it.
+- No lost wake: the check-and-park sequence and the release-requeue sequence
+  run under the same lock, and every wake happens outside it.
 - No deadlock: a parked coroutine yields its worker, so a single-worker runtime
   makes progress.
 

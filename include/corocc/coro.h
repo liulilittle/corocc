@@ -222,11 +222,11 @@ COROCC_API coro_state coro_get_state(const coro_t* c);
  *         token you were given instead of starting it again);
  *         CORO_EDESTROYED if it is already dead.
  *
- * Thread ownership: the thread that first starts a coroutine owns it, and
- * only the owner may drive it. A start from any other thread is refused with
- * CORO_EBUSY instead of switching into a context that belongs to a thread
- * the library does not control. Delivering a coroutine to another thread
- * ships with the runtime layer.
+ * Thread driving: control is not bound to the creating thread. Each
+ * suspension point publishes a fresh credential, and whichever thread holds
+ * it may start or resume the coroutine; the claim is a compare-and-swap, so
+ * concurrent drives fail safely with CORO_EBUSY and exactly one execution
+ * flow enters the coroutine.
  */
 COROCC_API coro_status coro_start(coro_t* c, coro_token* next);
 
@@ -255,8 +255,7 @@ COROCC_API coro_status coro_start(coro_t* c, coro_token* next);
  *         already published, i.e. the coroutine has finished;
  *         CORO_ESTALE if tok is not the live credential (stale or never
  *         issued);
- *         CORO_EBUSY if the coroutine is running or mid-switch, or if it
- *         belongs to another thread (see coro_start).
+ *         CORO_EBUSY if the coroutine is running or mid-switch.
  */
 COROCC_API coro_status coro_resume(coro_t* c, coro_token tok,
                                    coro_token* next);
@@ -284,11 +283,11 @@ COROCC_API coro_status coro_yield(void);
 /**
  * coro_pump -- run every wakeup request waiting in this thread's queue.
  *
- * A coroutine belongs to the thread that first drove it, so a wakeup requested
- * from any other thread is queued for that owner instead of being executed
- * here. The owner processes the queue inside coro_pump, at a point of its own
- * choosing (a blocking wait, a scheduler tick, or simply between operations),
- * which is what keeps exactly one execution flow entering any suspension point.
+ * Wakeup requests can be queued for this thread instead of driving a
+ * coroutine in place; coro_pump executes them at a point of the caller's
+ * choosing (a blocking wait, a scheduler tick, or simply between operations).
+ * Claiming each request through the same compare-and-swap the inline resume
+ * uses is what keeps exactly one execution flow entering any suspension point.
  *
  * Each queued request is claimed once, with the same compare-and-swap the
  * inline resume uses, so a request that loses the claim is dropped as a
