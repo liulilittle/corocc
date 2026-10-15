@@ -35,11 +35,11 @@ jobs:
           - { abi: ppc64le,      triple: powerpc64le-unknown-linux-gnu, toolchain: scripts/toolchains/ppc64le.cmake, apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
           - { abi: s390x,        triple: s390x-unknown-linux-gnu, toolchain: scripts/toolchains/s390x.cmake, apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
           - { abi: riscv64,      triple: riscv64-unknown-linux-gnu, toolchain: scripts/toolchains/riscv64.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
-          # --- prebuilt toolchain assets (toolchain-v1 release); enable in a
-          #     separate PR after the assets are published (verdict item 11) ---
-          # - { abi: aarch64_be, triple: aarch64_be-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
-          # - { abi: armeb,      triple: armeb-unknown-linux-gnueabi, toolchain: scripts/toolchains/armeb.cmake, apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
-          # - { abi: riscv32,    triple: riscv32-unknown-linux-gnu, toolchain: scripts/toolchains/riscv32.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }
+          # --- prebuilt toolchain-v1 release assets: sha256-verified fetch into
+          #     /opt before the build (assets: = asset triple) ---
+          - { abi: aarch64_be, triple: aarch64_be-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
+          - { abi: armeb,      triple: armeb-unknown-linux-gnueabi, toolchain: scripts/toolchains/armeb.cmake, apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
+          - { abi: riscv32,    triple: riscv32-unknown-linux-gnu, toolchain: scripts/toolchains/riscv32.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }
           # - { abi: mips_n32,   triple: mipsisa32r6el-unknown-linux-gnu, toolchain: scripts/toolchains/mipsn32.cmake, apt: "gcc-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32atomic1-mips64-cross" }   # enable after W6
     steps:
       - uses: actions/checkout@v4

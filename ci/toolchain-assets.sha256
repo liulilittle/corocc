@@ -8,10 +8,16 @@
 # Expected asset families per triple:
 #   corocc-toolchain-<triple>-gcc<ver>-glibc<ver>.tar.gz   (top level: corocc-toolchain/<triple>/...)
 #   corocc-sysroot-<triple>-glibc<ver>.tar.gz              (top level: corocc-sysroot/<triple>/...)
-# aarch64_be/armeb/riscv32 currently carry both; sysroot-only is allowed and
-# detected from the asset name.
+# aarch64_be/armeb/riscv32 carry both; sysroot-only is allowed and detected
+# from the asset name.
 #
-# Published by the W4/W5 pipeline (ISA checkpoint #3); hashes are written back
-# here before the asset matrix rows are uncommented in .github/workflows/ci.yml.
+# Asset inventory (6 assets; sha256sum natural order). For a full-chain triple
+# the sysroot line precedes the toolchain line: the fetch probe asserts
+# <opt>/corocc-sysroot/<triple>/usr/include/stdio.h after every unpack.
 #
-# (empty until the first toolchain-v1 publication)
+c180c00cdcbbd76b522551163e57fde575628c1ad81e96a075d54d0dd74e198b  corocc-sysroot-aarch64_be-linux-gnu-glibc2.39.tar.gz
+06ad1445643ebd37fbc9fbebab1eee59781c1597a60cbf8afa507fb624f2322d  corocc-sysroot-armeb-linux-gnueabi-glibc2.39.tar.gz
+0f578639f7089c15ba5299b85a6b198787c6761417c0bfd0382e752fb4ef4337  corocc-sysroot-riscv32-linux-gnu-glibc2.39.tar.gz
+948dc8a3fe6b6c2ac190f9519d4213e24c9688e07fc7aaad1b469bf31bd6c9fd  corocc-toolchain-aarch64_be-linux-gnu-gcc13.3.0-glibc2.39.tar.gz
+51159f7f78d566e718e5b5fef7c62465bc426619dd75d8c62b647a3c2aec5dbe  corocc-toolchain-armeb-linux-gnueabi-gcc13.3.0-glibc2.39.tar.gz
+570b27094990f9b4b237794a9477f2e1c82f999dd74ed705e8219bf33de3acb6  corocc-toolchain-riscv32-linux-gnu-gcc13.3.0-glibc2.39.tar.gz

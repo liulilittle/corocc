@@ -131,13 +131,12 @@ jobs:
           - { abi: ppc64le,      toolchain: scripts/toolchains/ppc64le.cmake,  apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
           - { abi: s390x,        toolchain: scripts/toolchains/s390x.cmake,    apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
           - { abi: riscv64,      toolchain: scripts/toolchains/riscv64.cmake,  apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
-          # --- prebuilt toolchain assets (toolchain-v1 release); enable in a
-          #     separate PR after the assets are published (verdict item 11:
-          #     rows commented until then; add the cross-* rows to
-          #     ci/site-matrix.env in the same PR) ---
-          # - { abi: aarch64_be, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
-          # - { abi: armeb,      toolchain: scripts/toolchains/armeb.cmake,      apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
-          # - { abi: riscv32,    toolchain: scripts/toolchains/riscv32.cmake,    apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }  # L1: riscv32.cmake declares riscv64-linux-gnu-g++
+          # --- prebuilt toolchain-v1 assets: fetch-toolchain-assets.sh verifies
+          #     the sha256 ledger (ci/toolchain-assets.sha256) and unpacks into
+          #     /opt before the build; the assets: value is the asset triple ---
+          - { abi: aarch64_be, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
+          - { abi: armeb,      toolchain: scripts/toolchains/armeb.cmake,      apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
+          - { abi: riscv32,    toolchain: scripts/toolchains/riscv32.cmake,    apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }
           # - { abi: mips_n32,   toolchain: scripts/toolchains/mipsn32.cmake,    apt: "gcc-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32atomic1-mips64-cross" }   # enable after W6
           # - { abi: mipsel_n32, toolchain: scripts/toolchains/mipsn32el.cmake,  apt: "gcc-13-multilib-mips64el-linux-gnuabi64 libc6-dev-mipsn32-mips64el-cross libn32atomic1-mips64el-cross" } # enable after W6
     steps:
