@@ -1,50 +1,116 @@
 name: release
-
-# Publishes prebuilt static libraries so users can download and use the
-# library with no build step (see the "Prebuilt artifacts" section of
-# README.md).
 on:
   push:
-    tags:
-      - "v*"
-
+    tags: ["v*"]
+  workflow_dispatch:                      # rebuild/re-upload entry (verdict item 2)
+    inputs:
+      tag:
+        description: "Existing tag to rebuild and re-upload (e.g. v0.1.0)"
+        required: true
 permissions:
   contents: write
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
 
 jobs:
-  prebuild:
-    runs-on: ubuntu-latest
+  prebuild-linux:
+    name: prebuild ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(vars.CI_MAX_PARALLEL || '8') }}
+      matrix:                             # same source as the ci.yml cross matrix (ci/check-workflows.sh)
+        include:
+          - { abi: native-gcc,   triple: x86_64-unknown-linux-gnu, toolchain: "", apt: "", assets: "" }
+          - { abi: aarch64,      triple: aarch64-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64.cmake, apt: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu", assets: "" }
+          - { abi: armhf,        triple: arm-linux-gnueabihf, toolchain: scripts/toolchains/arm32.cmake, apt: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf", assets: "" }
+          - { abi: i386,         triple: i386-unknown-linux-gnu, toolchain: scripts/toolchains/i386.cmake, apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }
+          - { abi: mips_o32,     triple: mips-unknown-linux-gnu, toolchain: scripts/toolchains/mips32.cmake, apt: "gcc-mips-linux-gnu g++-mips-linux-gnu", assets: "" }
+          - { abi: mipsel_o32,   triple: mipsel-unknown-linux-gnu, toolchain: scripts/toolchains/mips32el.cmake, apt: "gcc-mipsel-linux-gnu g++-mipsel-linux-gnu", assets: "" }
+          - { abi: mips64_n64,   triple: mips64-unknown-linux-gnuabi64, toolchain: scripts/toolchains/mips64.cmake, apt: "gcc-13-mips64-linux-gnuabi64 g++-13-mips64-linux-gnuabi64", assets: "" }
+          - { abi: mips64el_n64, triple: mips64el-unknown-linux-gnuabi64, toolchain: scripts/toolchains/mips64el.cmake, apt: "gcc-13-mips64el-linux-gnuabi64 g++-13-mips64el-linux-gnuabi64", assets: "" }
+          - { abi: ppc32,        triple: powerpc-unknown-linux-gnu, toolchain: scripts/toolchains/ppc32.cmake, apt: "gcc-powerpc-linux-gnu g++-powerpc-linux-gnu", assets: "" }
+          - { abi: ppc64,        triple: powerpc64-unknown-linux-gnu, toolchain: scripts/toolchains/ppc64.cmake, apt: "gcc-powerpc64-linux-gnu g++-powerpc64-linux-gnu", assets: "" }
+          - { abi: ppc64le,      triple: powerpc64le-unknown-linux-gnu, toolchain: scripts/toolchains/ppc64le.cmake, apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
+          - { abi: s390x,        triple: s390x-unknown-linux-gnu, toolchain: scripts/toolchains/s390x.cmake, apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
+          - { abi: riscv64,      triple: riscv64-unknown-linux-gnu, toolchain: scripts/toolchains/riscv64.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
+          # --- prebuilt toolchain assets (toolchain-v1 release); enable in a
+          #     separate PR after the assets are published (verdict item 11) ---
+          # - { abi: aarch64_be, triple: aarch64_be-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
+          # - { abi: armeb,      triple: armeb-unknown-linux-gnueabi, toolchain: scripts/toolchains/armeb.cmake, apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
+          # - { abi: riscv32,    triple: riscv32-unknown-linux-gnu, toolchain: scripts/toolchains/riscv32.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }
+          # - { abi: mips_n32,   triple: mipsisa32r6el-unknown-linux-gnu, toolchain: scripts/toolchains/mipsn32.cmake, apt: "gcc-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32atomic1-mips64-cross" }   # enable after W6
     steps:
       - uses: actions/checkout@v4
-
-      - name: install cross toolchain and qemu-user
+        with: { ref: "${{ inputs.tag || github.ref }}" }
+      - run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ninja-build ccache qemu-user ${{ matrix.apt }}
+      - if: matrix.assets
+        run: bash scripts/ci/fetch-toolchain-assets.sh "${{ matrix.assets }}"
+      - name: build + qemu ctest gate
+        env: { TOOLCHAIN: "${{ matrix.toolchain }}" }
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build qemu-user \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          extra=()
+          if [ -n "$TOOLCHAIN" ]; then extra+=(--toolchain "$TOOLCHAIN"); fi   # L2: empty toolchain is not passed
+          bash scripts/ci/build-test.sh "${{ matrix.abi }}" "${extra[@]}"
+      - name: stage dist
+        run: bash scripts/ci/stage-dist.sh "${{ matrix.abi }}" "${{ matrix.triple }}" "${{ inputs.tag || github.ref_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.triple }}
+          path: dist-out/corocc-${{ inputs.tag || github.ref_name }}-${{ matrix.triple }}.tar.gz   # G3: same naming chain as stage-dist.sh
+          if-no-files-found: error
 
-      - name: prebuild every supported triple
-        run: bash scripts/prebuild-all.sh
+  prebuild-windows:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ inputs.tag || github.ref }}" }
+      - run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
+      - shell: bash
+        run: bash scripts/ci/stage-dist-win.sh "${{ inputs.tag || github.ref_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-x86_64-pc-windows-msvc
+          path: dist-out/corocc-${{ inputs.tag || github.ref_name }}-x86_64-pc-windows-msvc.zip   # G3: same naming chain
+          if-no-files-found: error
 
-      - name: package per-triple archives
+  publish:
+    needs: [prebuild-linux, prebuild-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      # G2 fix: flat BASENAMES only (consumers run `sha256sum -c` on the flat
+      # release assets); no cd; explicit globstar; duplicate-name guard;
+      # sort + cat witness.
+      - name: checksums (flat basenames, workspace root)
         run: |
-          mkdir -p archives
-          for d in dist/*/; do
-            name="$(basename "$d")"
-            tar -C dist -czf "archives/corocc-$name-linux.tar.gz" "$name"
+          shopt -s globstar nullglob
+          files=(artifacts/**/*.tar.gz artifacts/**/*.zip)
+          ((${#files[@]} > 0)) || { echo "no artifacts"; exit 1; }
+          : > SHA256SUMS
+          for f in "${files[@]}"; do
+            ( cd "$(dirname "$f")" && sha256sum "$(basename "$f")" ) >> SHA256SUMS
           done
-          ls -la archives
-
-      - name: attach archives to the GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+          dup="$(awk '{print $2}' SHA256SUMS | sort | uniq -d)"
+          if [ -n "$dup" ]; then echo "duplicate asset names: $dup"; exit 1; fi
+          sort -k2 SHA256SUMS -o SHA256SUMS
+          cat SHA256SUMS
+      - name: publish
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          tag="${GITHUB_REF_NAME}"
+          shopt -s globstar nullglob
+          tag="${{ inputs.tag || github.ref_name }}"
+          assets=(artifacts/**/*.tar.gz artifacts/**/*.zip)
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" archives/*.tar.gz --clobber
+            gh release upload "$tag" "${assets[@]}" SHA256SUMS --clobber
           else
-            gh release create "$tag" archives/*.tar.gz \
-              --title "corocc $tag" --generate-notes
+            gh release create "$tag" --title "corocc $tag" --generate-notes "${assets[@]}" SHA256SUMS
           fi
           gh release view "$tag" --json assets --jq '.assets[].name'

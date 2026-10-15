@@ -37,12 +37,13 @@ The origin, version, and license of each are recorded below.
 
 ## Hand-written context-switch backends
 
-The following backends are hand-written for `corocc` (not derived from
-Boost.Context); they contain no third-party code:
-
-- `mips32_n32_elf_gas.S` (MIPS N32; big- and little-endian selected via
-  `__MIPSEL__`) - follows the conventions of the vendored `mips32_o32` /
-  `mips64_n64` backends and the toolchain-calibrated N32 psABI.
+The following backend is hand-written for `corocc` (it contains no
+third-party code): `mips32_n32_elf_gas.S` (MIPS N32; big- and little-endian
+selected via `__MIPSEL__`). It is a **derivative** re-implementation built on
+the register-frame structure of the vendored `mips32_o32` / `mips64_n64`
+backends, with the N32 specifics calibrated against the toolchain ABIs
+(8-byte general-register slots, the even f20-f30 FP set, and the
+single-register `coro_transfer` packing).
 
 The `corocc` project itself is licensed under the MIT License; see `LICENSE`
 at the repository root.

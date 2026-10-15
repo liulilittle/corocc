@@ -1,10 +1,11 @@
 # i386 (x86 32-bit, SysV ABI) built with the host gcc -m32, tests under
 # qemu-i386. Requires the libc6-dev-i386 + lib32gcc-13-dev host packages.
 #
-# CMAKE_CXX_COMPILER is deliberately left at its default: no 32-bit C++
-# runtime is installed here, and every target built for this ABI is C (the
-# Boost coexistence test is C++ but native-only). The C and ASM compile steps
-# get -m32 explicitly.
+# Whether the C++ suites are built is a build-segment gate in tests/CMakeLists
+# (cross sites register the C-only segment), not a toolchain limit; the g++
+# driver below is declared because configure runs a C++ compiler check anyway
+# (a -m32 -static link, hence the lib32stdc++-13-dev package). The C and ASM
+# compile steps get -m32 explicitly.
 #
 # -isystem /usr/include/x86_64-linux-gnu: gcc -m32 on amd64 does not add the
 # x86 multiarch include dir, so <asm/errno.h> (pulled in through <errno.h> ->

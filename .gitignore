@@ -5,6 +5,8 @@ build-*/
 .opencode/backups/
 .opencode/logs/
 dist/
+dist-out/
+ci-logs/
 *.obj
 *.o
 *.a

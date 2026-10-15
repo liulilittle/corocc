@@ -15,13 +15,16 @@ option(COROCC_LTCG "Enable link-time code generation in Release builds (MSVC /GL
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Zero-warning policy for ALL our code (library and tests). The vendored Boost asm is unaffected (C options).
+# Zero-warning policy for ALL our C/C++ code (library and tests). The options
+# are attached per language so they never reach the assemblers: ml64 rejects
+# /W4 /WX /utf-8, and under the Visual Studio generator the directory-level
+# options used to leak into the ASM_MASM build customization (MSB3721,
+# audit A-2); the vendored Boost asm is unaffected (C options).
 if (MSVC)
-    add_compile_options(/W4 /WX)
-    # Sources are stored as UTF-8 (some comments are non-ASCII); without this
-    # the compiler reads them in the system code page and warns C4819, which
-    # /WX turns fatal.
-    add_compile_options(/utf-8)
+    # /utf-8: sources are stored as UTF-8 (some comments non-ASCII); without
+    # it the compiler reads them in the system code page and warns C4819,
+    # which /WX turns fatal.
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/W4;/WX;/utf-8>")
 else()
     add_compile_options(-Wall -Wextra -Werror)
 endif()

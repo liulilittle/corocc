@@ -4,107 +4,272 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CCACHE_DIR: /home/runner/.cache/ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 200M
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  # ci-summary: jobs allowed to report "skipped" (space-separated job ids).
+  # Default empty = any skipped job fails the summary.
+  ALLOW_SKIPPED: ""
+
 jobs:
-  # Native build and test with the default toolchain. ubuntu-latest ships
-  # gcc, clang, cmake and ninja.
   native-gcc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: build + test + benchmark
-        run: bash scripts/build.sh
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build ccache
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/ccache
+          key: ccache-native-gcc-${{ github.sha }}
+          restore-keys: ccache-native-gcc-
+      - run: bash scripts/ci/build-test.sh native-gcc
 
   native-clang:
-    runs-on: ubuntu-latest
-    env:
-      CC: clang
-      CXX: clang++
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env: { CC: clang, CXX: clang++ }
     steps:
       - uses: actions/checkout@v4
-      - name: build + test with clang
-        run: bash scripts/build.sh
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build ccache
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/ccache
+          key: ccache-native-clang-${{ github.sha }}
+          restore-keys: ccache-native-clang-
+      - run: bash scripts/ci/build-test.sh native-clang
 
-  # Every cross target: builds and qemu-tests the vendored backends and
-  # validates the remaining toolchain files (see scripts/README.md).
-  cross-isa:
-    runs-on: ubuntu-latest
+  native-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: install cross toolchains and qemu-user
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build \
-            qemu-user \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf gcc-arm-linux-gnueabi \
-            gcc-mips-linux-gnu gcc-mipsel-linux-gnu \
-            gcc-powerpc-linux-gnu gcc-powerpc64-linux-gnu gcc-powerpc64le-linux-gnu \
-            gcc-s390x-linux-gnu gcc-riscv64-linux-gnu
-      - name: build + qemu-test every cross target
-        run: bash scripts/build-all.sh
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build ccache
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/ccache
+          key: ccache-native-arm64-${{ github.sha }}
+          restore-keys: ccache-native-arm64-
+      - run: bash scripts/ci/build-test.sh native-arm64
 
-  header-conformance:
-    runs-on: ubuntu-latest
+  asan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env: { ASAN_OPTIONS: detect_leaks=1 }
     steps:
       - uses: actions/checkout@v4
-      - name: public headers under -pedantic-errors (C89/C99/C11, C++98/11/17)
-        run: bash .github/scripts/header-conformance.sh
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build
+      - run: bash scripts/ci/build-test.sh asan -- -DCOROCC_ASAN=ON
 
-  # ThreadSanitizer covers the runtime's own concurrency (delivery queue,
-  # identity registry, atomics). The drive path cannot be instrumented: TSan
-  # does not follow a stack switch performed by assembly, which is why the
-  # concurrency suites are split into a TSan-visible part and a behavioural
-  # part. The behavioural part runs in every other job.
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: build with ThreadSanitizer
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
-          cmake -S . -B build-tsan -G Ninja -DCOROCC_TSAN=ON
-          cmake --build build-tsan
-      - name: run the TSan-visible concurrency suite
-        run: ctest --test-dir build-tsan -R conc_runtime_tsan --output-on-failure
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build
+      # G0 fix: the TSan compile switch is part of the gate. The script
+      # additionally asserts COROCC_TSAN:BOOL=ON in the build cache and reds
+      # the job when the flag is dropped. -Wno-error=tsan: gcc 13 has no
+      # instrumentation for __atomic_thread_fence and flags it under
+      # -Wtsan; the project's -Werror would otherwise red the build (the
+      # warning stays visible in the log). Effective flag set == the M9-era
+      # build-tsan tree's cache (-fsanitize=thread -Wno-error=tsan; the
+      # sanitizer flag itself comes from the COROCC_TSAN branch).
+      - run: bash scripts/ci/build-test.sh tsan --select conc_runtime_tsan -- -DCOROCC_TSAN=ON -DCMAKE_C_FLAGS=-Wno-error=tsan -DCMAKE_CXX_FLAGS=-Wno-error=tsan
 
-  prebuild-artifacts:
-    runs-on: ubuntu-latest
+  nospin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: install cross toolchain and qemu-user
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build qemu-user \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-      - name: stage dist/<triple> and verify drop-in consumption
-        run: |
-          bash scripts/prebuild-all.sh
-          ls -R dist | head -40
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build
+      - run: bash scripts/ci/build-test.sh nospin -- -DCOROCC_PROBE_NOSPIN=ON
 
-  # Staged rollouts. These hosts need a context-switch backend that lands in
-  # milestone M9: the PE/MASM backend for MSVC and MinGW, and Mach-O for
-  # macOS. They are expected to fail at configure today, hence
-  # continue-on-error; once the backend lands they become hard gates.
-  pending-msvc:
-    runs-on: windows-latest
+  headers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/header-conformance.sh
+
+  cross:
+    name: cross ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(vars.CI_MAX_PARALLEL || '8') }}
+      matrix:
+        include:
+          # --- apt cross-gcc + qemu-user; -static; qemu ctest gate (C-only) ---
+          # Every toolchain file that names a cross CXX needs the matching g++
+          # package (project() language detection runs even for the C-only
+          # test set that the cross gate builds).
+          - { abi: aarch64,      toolchain: scripts/toolchains/aarch64.cmake,  apt: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu", assets: "" }
+          - { abi: armhf,        toolchain: scripts/toolchains/arm32.cmake,    apt: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf", assets: "" }
+          - { abi: i386,         toolchain: scripts/toolchains/i386.cmake,     apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }          # C-only ABI: the C++ suites are gated out, but 32-bit libstdc++(.a) is needed for CMake's CXX detection link (-static, audit A-1)
+          - { abi: mips_o32,     toolchain: scripts/toolchains/mips32.cmake,   apt: "gcc-mips-linux-gnu g++-mips-linux-gnu", assets: "" }
+          - { abi: mipsel_o32,   toolchain: scripts/toolchains/mips32el.cmake, apt: "gcc-mipsel-linux-gnu g++-mipsel-linux-gnu", assets: "" }
+          - { abi: mips64_n64,   toolchain: scripts/toolchains/mips64.cmake,   apt: "gcc-13-mips64-linux-gnuabi64 g++-13-mips64-linux-gnuabi64", assets: "" }      # toolchain names the versioned g++-13 driver
+          - { abi: mips64el_n64, toolchain: scripts/toolchains/mips64el.cmake, apt: "gcc-13-mips64el-linux-gnuabi64 g++-13-mips64el-linux-gnuabi64", assets: "" }  # toolchain names the versioned g++-13 driver
+          - { abi: ppc32,        toolchain: scripts/toolchains/ppc32.cmake,    apt: "gcc-powerpc-linux-gnu g++-powerpc-linux-gnu", assets: "" }
+          - { abi: ppc64,        toolchain: scripts/toolchains/ppc64.cmake,    apt: "gcc-powerpc64-linux-gnu g++-powerpc64-linux-gnu", assets: "" }
+          - { abi: ppc64le,      toolchain: scripts/toolchains/ppc64le.cmake,  apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
+          - { abi: s390x,        toolchain: scripts/toolchains/s390x.cmake,    apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
+          - { abi: riscv64,      toolchain: scripts/toolchains/riscv64.cmake,  apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
+          # --- prebuilt toolchain assets (toolchain-v1 release); enable in a
+          #     separate PR after the assets are published (verdict item 11:
+          #     rows commented until then; add the cross-* rows to
+          #     ci/site-matrix.env in the same PR) ---
+          # - { abi: aarch64_be, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
+          # - { abi: armeb,      toolchain: scripts/toolchains/armeb.cmake,      apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
+          # - { abi: riscv32,    toolchain: scripts/toolchains/riscv32.cmake,    apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }  # L1: riscv32.cmake declares riscv64-linux-gnu-g++
+          # - { abi: mips_n32,   toolchain: scripts/toolchains/mipsn32.cmake,    apt: "gcc-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32atomic1-mips64-cross" }   # enable after W6
+          # - { abi: mipsel_n32, toolchain: scripts/toolchains/mipsn32el.cmake,  apt: "gcc-13-multilib-mips64el-linux-gnuabi64 libc6-dev-mipsn32-mips64el-cross libn32atomic1-mips64el-cross" } # enable after W6
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cross toolchain + qemu-user
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ninja-build ccache qemu-user ${{ matrix.apt }}
+      - name: fetch prebuilt toolchain assets
+        if: matrix.assets
+        run: bash scripts/ci/fetch-toolchain-assets.sh "${{ matrix.assets }}"
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/ccache
+          key: ccache-${{ matrix.abi }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.abi }}-
+      - name: build + qemu ctest (C-only; cpp_perf excluded by the script)
+        run: bash scripts/ci/build-test.sh "${{ matrix.abi }}" --toolchain "${{ matrix.toolchain }}"
+      - name: upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.abi }}
+          path: ci-logs/${{ matrix.abi }}/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  windows-msvc:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - run: |
+          cmake --build build --config Release --parallel 2
+          cmake --build build --config Debug --parallel 2
+      # A-9 ruling (b): Release-only ctest. The Debug config remains a build
+      # gate above; its ctest set is disabled because three suites hang in
+      # MSVC Debug (OOM injection x Debug-STL extra allocations -> uncaught
+      # bad_alloc -> terminate/abort -> ucrtbased CrtDbgReportW modal dialog;
+      # the death tests' abort-expecting children hit the same dialog).
+      # Reproduced on the pre-fix tree (not caused by the M10 edits); Linux
+      # Debug and Windows Release are green and cdb stacks show no library
+      # defect. Debug ctest is tracked as an M8 hardening candidate
+      # (test-side robustness + abort-dialog suppression).
+      - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
+        # NOTE (L5): this job calls cmake/ctest directly (it does not use
+        # build-test.sh). Under the VS multi-config generator CMAKE_BUILD_TYPE
+        # is empty, so cpp_perf is never registered here; the script-level
+        # -E cpp_perf applies to the other jobs.
+
+  ndk:
+    name: ndk ${{ matrix.android_abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        android_abi: [arm64-v8a, x86_64]   # armeabi-v7a pending local verification
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build
+      - name: compile+link gate (build-only; NDK preinstalled, ANDROID_NDK is set)
+        run: |
+          cmake -S . -B build-ndk -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=scripts/toolchains/android-ndk.cmake \
+            -DANDROID_ABI=${{ matrix.android_abi }}
+          cmake --build build-ndk -j2
+
+  # Optional, report-only: never a required check (verdict item 2).
+  perf-report:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     continue-on-error: true
+    env: { CCACHE_DIR: /home/runner/.cache/ccache, CCACHE_COMPILERCHECK: content }
     steps:
       - uses: actions/checkout@v4
-      - name: configure (needs the PE backend, milestone M9)
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build ccache
+      - run: |
+          cmake -S . -B build-perf -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-perf -j2
+      - name: benchmarks (report-only; outputs land in ci-logs/perf/)   # L3 fix
+        run: |
+          mkdir -p ci-logs/perf
+          { ./build-perf/tests/bench_switch
+            ./build-perf/tests/bench_switch_pure
+            ./build-perf/tests/bench_rt_mn ; } 2>&1 | tee ci-logs/perf/bench-c.log
+          ./build-perf/tests/bench_cpp_switch 2>&1 | tee ci-logs/perf/bench-cpp-strict.log
+      - uses: actions/upload-artifact@v4
+        with: { name: perf-report, path: ci-logs/perf/, if-no-files-found: ignore }
 
-  pending-macos:
-    runs-on: macos-latest
-    continue-on-error: true
+  ci-summary:
+    if: always()
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, cross, windows-msvc, ndk]
+    # NOTE: perf-report is intentionally NOT in needs (non-required).
+    runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: configure (needs the Mach-O backend, milestone M9)
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: aggregate (skipped fails unless explicitly whitelisted)
+        env:
+          ALLOW_SKIPPED: ${{ env.ALLOW_SKIPPED }}
+          R_NATIVE_GCC: ${{ needs.native-gcc.result }}
+          R_NATIVE_CLANG: ${{ needs.native-clang.result }}
+          R_NATIVE_ARM64: ${{ needs.native-arm64.result }}
+          R_ASAN: ${{ needs.asan.result }}
+          R_TSAN: ${{ needs.tsan.result }}
+          R_NOSPIN: ${{ needs.nospin.result }}
+          R_HEADERS: ${{ needs.headers.result }}
+          R_CROSS: ${{ needs.cross.result }}
+          R_WINDOWS: ${{ needs.windows-msvc.result }}
+          R_NDK: ${{ needs.ndk.result }}
+        run: |
+          set -u
+          fail=0
+          report() { # id result
+            printf '%-16s %s\n' "$1" "$2"
+            case "$2" in
+              success) ;;
+              skipped) case " $ALLOW_SKIPPED " in *" $1 "*) ;; *) fail=1 ;; esac ;;
+              *) fail=1 ;;
+            esac
+          }
+          report native-gcc      "$R_NATIVE_GCC"
+          report native-clang    "$R_NATIVE_CLANG"
+          report native-arm64    "$R_NATIVE_ARM64"
+          report asan            "$R_ASAN"
+          report tsan            "$R_TSAN"
+          report nospin          "$R_NOSPIN"
+          report headers         "$R_HEADERS"
+          report cross           "$R_CROSS"
+          report windows-msvc    "$R_WINDOWS"
+          report ndk             "$R_NDK"
+          exit "$fail"

@@ -287,6 +287,11 @@ if (MSVC)
     target_compile_definitions(probe_collect_race PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+# M10 (verdict item 1): the C++11 wrapper suites and the cpp_perf gate are
+# native-only; cross sites stay C-only (cross=34). This wraps the whole M8
+# segment below without touching any target or condition inside it.
+if(NOT CMAKE_CROSSCOMPILING)
+
 # ---- M8: the C++11 wrapper suites (header-only; the C library is unchanged) ----
 # P2-2: every wrapper target pins CXX_STANDARD 11 + REQUIRED. MSVC has no
 # C++11 mode; there the accepted baseline is the default /std:c++14 under
@@ -337,3 +342,5 @@ if (NOT COROCC_ASAN AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR
     add_test(NAME cpp_perf COMMAND bench_cpp_switch --loose)
     set_tests_properties(cpp_perf PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 endif()
+
+endif()  # NOT CMAKE_CROSSCOMPILING (M10: cross sites are C-only, cross=34)

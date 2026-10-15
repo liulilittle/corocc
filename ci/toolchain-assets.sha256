@@ -1,0 +1,17 @@
+# Prebuilt toolchain assets ledger (release tag: toolchain-v1, immutable).
+#
+# Format: one sha256sum line per asset (<sha256>  <asset-name>); the asset
+# names are flat (no directories). scripts/ci/fetch-toolchain-assets.sh
+# refuses to run when this file is missing, empty or has no entry for the
+# requested triple -- an empty ledger must never fail open.
+#
+# Expected asset families per triple:
+#   corocc-toolchain-<triple>-gcc<ver>-glibc<ver>.tar.gz   (top level: corocc-toolchain/<triple>/...)
+#   corocc-sysroot-<triple>-glibc<ver>.tar.gz              (top level: corocc-sysroot/<triple>/...)
+# aarch64_be/armeb/riscv32 currently carry both; sysroot-only is allowed and
+# detected from the asset name.
+#
+# Published by the W4/W5 pipeline (ISA checkpoint #3); hashes are written back
+# here before the asset matrix rows are uncommented in .github/workflows/ci.yml.
+#
+# (empty until the first toolchain-v1 publication)

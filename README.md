@@ -16,7 +16,7 @@ Milestone 1 (skeleton + L0 execution contexts) is complete:
 | Area | State |
 | --- | --- |
 | Layers | L0-L3 implemented: context primitives (`coro_stack`, `coro_ctx`), coroutine objects, the M:N work-stealing runtime with synchronization primitives, and the structured-concurrency scope layer; the header-only C++11 wrapper (`coro.hpp`, M8) and the Windows (MSVC) port (M9) have landed |
-| Architectures | x86_64 (SysV) and aarch64 (AAPCS) vendored assembly; aarch64 verified under `qemu-aarch64` |
+| Architectures | 17 context-switch backends vendored: x86_64 (SysV), i386, aarch64/aarch64_be, arm32/armeb, MIPS o32/n32/n64 in both endiannesses, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64; the qemu-user cross matrix is green on every ABI (see `scripts/README.md`) |
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
 | Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`); clean under ASan, including stack-use-after-return detection |
 | Boost coexistence | Symbol-renamed assembly coexists with real Boost.Context in one binary (`boost_coexist` test) |
@@ -25,8 +25,9 @@ Milestone 1 (skeleton + L0 execution contexts) is complete:
 ## Requirements
 
 - CMake >= 3.16, Ninja or Make, a C99 and C++11 compiler.
-- To run the aarch64 binaries on an x86_64 host: `qemu-aarch64` plus an
-  aarch64 sysroot + cross toolchain (`aarch64-linux-gnu-gcc`).
+- To run cross-target binaries on an x86_64 host: the `qemu-user` emulator for
+  that ISA plus the matching cross toolchain + sysroot. `scripts/build-all.sh`
+  covers all 17 ABIs; the canonical aarch64 flow is shown below.
 - Optional: Boost.Context headers/library, for the coexistence test.
 - No other dependencies.
 
@@ -307,13 +308,22 @@ is in [docs/api/coro_cpp.md](docs/api/coro_cpp.md).
   with its synchronization primitives and the structured-concurrency scope
   layer), together with the header-only C++11 wrapper (`coro.hpp`, M8) and
   the Windows (MSVC) port (M9). The IO loop is a follow-up milestone.
-- **Architectures:** x86_64 and aarch64 are vendored and tested; the rest of
-  the planned ISA matrix (i386, arm32/armeb, mips, ppc, s390x, riscv,
-  big-endian variants) is not yet wired into the build.
+- **Architectures:** all 17 backends are vendored, wired into the build and
+  green under qemu-user (i386, arm32/armeb, MIPS o32/n32/n64 little- and
+  big-endian, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64, aarch64/aarch64_be);
+  Windows (MSVC x64) is covered natively. Toolchain files and the per-ABI
+  runner: `scripts/README.md`, `scripts/ci/build-test.sh`.
 - **Threading:** a `coro_ctx` is not thread-safe — it must be swapped from a
   single thread at a time (no internal locks by design at this layer).
 - **Exceptions:** `coro_ctx_swap` must not be used to propagate C++
   exceptions across a context boundary.
+- **TLS in coroutines on s390x:** do not rely on `thread_local` (TLS)
+  variables inside coroutine bodies on s390x — gcc caches the thread pointer
+  in a callee-saved register that context switching restores across threads,
+  so the cached value can be stale after a switch (the s390x build therefore
+  also uses `-fno-stack-protector`). The general `thread_local` contract is in
+  [docs/api/coro.md](docs/api/coro.md); the s390x specifics are in
+  `.opencode/logs/isa/exec/S390X-TLS-note.md`. Other ABIs are unaffected.
 - **Cross-build tests:** the Boost-coexistence test is only registered for
   native builds.
 

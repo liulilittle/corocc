@@ -1,9 +1,10 @@
 # mips64 big-endian N64 (mips64-linux-gnuabi64), tests under qemu-mips64.
 # Note: on Ubuntu noble the unversioned mips64-linux-gnuabi64-gcc symlink
 # dangles at gcc-12 (not installed); the installed noble cross compiler is
-# gcc-13, so the versioned driver name is used here. No cross g++ is
-# installed for this target; tests are C-only, and no cross C++ source is
-# built (the Boost coexistence test is native-only).
+# gcc-13, so the versioned driver name is used here. Whether the C++ suites
+# are built is a build-segment gate in tests/CMakeLists (cross sites register
+# the C-only segment), not a toolchain limit; the g++ driver below is declared
+# because configure runs a C++ compiler check anyway.
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR mips64)
 set(COROCC_ABI mips_n64)                     # authoritative backend selector

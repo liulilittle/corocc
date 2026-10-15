@@ -90,7 +90,11 @@ COROCC_API coro_status coro_sched_run(coro_sched_t* s);
  * Same as coro_sched_spawn, plus the coroutine handle so the caller can query
  * its state, cancel it or join it. The handle belongs to the scheduler: it must
  * not be destroyed by hand, and it becomes invalid the moment the coroutine
- * finishes and the scheduler releases it.
+ * finishes and the scheduler releases it. The handle also becomes invalid when
+ * the run loop's next drive loses the claim to the coroutine (the coroutine
+ * was cancelled or driven elsewhere): the loop then destroys the coroutine
+ * exactly as on completion, without it having finished -- so a scheduler-owned
+ * coroutine must never be driven by hand.
  *
  * @param s      Scheduler to queue on. Must not be NULL.
  * @param attr   Attributes, or NULL for the defaults.

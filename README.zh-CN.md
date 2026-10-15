@@ -15,7 +15,7 @@
 | 领域 | 状态 |
 | --- | --- |
 | 分层 | L0-L3 已实现:上下文原语(`coro_stack`、`coro_ctx`)、协程对象、M:N 工作窃取运行时(含同步原语)、结构化并发 scope 层;header-only C++11 封装(`coro.hpp`,M8)与 Windows(MSVC)移植(M9)均已落地 |
-| 架构 | x86_64(SysV)与 aarch64(AAPCS)汇编已 vendored;aarch64 经 `qemu-aarch64` 验证 |
+| 架构 | 17 个上下文切换后端已 vendored:x86_64(SysV)、i386、aarch64/aarch64_be、arm32/armeb、MIPS o32/n32/n64 双端序、ppc32/ppc64/ppc64le、s390x、riscv32/riscv64;qemu-user 交叉矩阵逐 ABI 全绿(见 `scripts/README.md`) |
 | 保护页 | 每个协程栈映射一个 `PROT_NONE` 守护页,溢出即触发缺页而不是破坏相邻内存 |
 | 消毒器 | ASan fiber-switch 钩子(`COROCC_ASAN`);ASan 下全部测试通过,含启用栈用后即返回检测 |
 | 与 Boost 共存 | 重命名符号后的汇编可与真实 Boost.Context 同进程链接(`boost_coexist` 测试) |
@@ -24,8 +24,9 @@
 ## 环境要求
 
 - CMake >= 3.16,Ninja 或 Make,支持 C99 与 C++11 的编译器。
-- 在 x86_64 主机上运行 aarch64 二进制需要 `qemu-aarch64` 与 aarch64 交叉
-  工具链 + sysroot(`aarch64-linux-gnu-gcc`)。
+- 在 x86_64 主机上运行交叉目标二进制需要对应 ISA 的 `qemu-user` 模拟器,
+  以及匹配的交叉工具链 + sysroot。`scripts/build-all.sh` 覆盖全部 17 个
+  ABI;下文 aarch64 流程即标准示例。
 - 可选:Boost.Context 头文件与库(仅用于共存测试)。
 - 无其他依赖。
 
@@ -285,11 +286,18 @@ int main() {
   带工作窃取的 M:N 运行时与同步原语、结构化并发 scope 层),以及
   header-only C++11 封装(`coro.hpp`,M8)与 Windows(MSVC)移植(M9)。
   IO 事件循环仍为后续里程碑。
-- **架构:**x86_64 与 aarch64 已完成 vendored 与测试;计划中的其余 ISA
-  (i386、arm32/armeb、mips、ppc、s390x、riscv 及大端变体)尚未接入构建。
+- **架构:**全部 17 个后端已 vendored、接入构建,qemu-user 下全绿(i386、
+  arm32/armeb、MIPS o32/n32/n64 双端序、ppc32/ppc64/ppc64le、s390x、
+  riscv32/riscv64、aarch64/aarch64_be);Windows(MSVC x64)以原生方式覆盖。
+  工具链文件与逐 ABI runner 见 `scripts/README.md`、`scripts/ci/build-test.sh`。
 - **线程:**`coro_ctx` 不是线程安全的 —— 同一时刻必须由单一线程切换
   (本层按设计不持锁)。
 - **异常:**禁止用 `coro_ctx_swap` 跨上下文边界传播 C++ 异常。
+- **s390x 协程内 TLS:**s390x 上协程体内不要依赖 `thread_local`(TLS)变量
+  —— gcc 将线程指针缓存在被保存寄存器中,而上下文切换会跨线程恢复该寄存器,
+  切换后缓存值可能失效(s390x 构建因此使用 `-fno-stack-protector`)。一般
+  `thread_local` 契约见 [docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md),
+  s390x 细节见 `.opencode/logs/isa/exec/S390X-TLS-note.md`。其他 ABI 不受影响。
 - **交叉构建测试:**Boost 共存测试仅在本机构建中注册。
 
 ## 许可证

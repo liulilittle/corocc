@@ -389,11 +389,12 @@ COROCC_API coro_status coro_rt_wait_all(coro_rt_t* rt);
 /**
  * coro_rt_join -- park the caller until a coroutine on the runtime finishes.
  *
- * The blocking counterpart of coro_join: it parks the calling coroutine (or,
- * outside any coroutine, blocks the calling thread) on the target's wait chain
- * and returns when the target ends, so the runtime keeps making progress while
- * the caller waits. Several waiters on one target are all released, and each
- * is resumed exactly once.
+ * The blocking counterpart of coro_join: it parks the calling coroutine on
+ * the target's wait chain and returns when the target ends, so the runtime
+ * keeps making progress while the caller waits. Several waiters on one target
+ * are all released, and each is resumed exactly once. Only a coroutine the
+ * runtime is driving can park this way: a plain thread and a coroutine
+ * joining its own handle are refused with CORO_EAGAIN instead of parking.
  *
  * A cancellation requested while the caller is parked is observed at its next
  * safe point, like anywhere else. If the target has finished by then, the
@@ -408,7 +409,11 @@ COROCC_API coro_status coro_rt_wait_all(coro_rt_t* rt);
  * @return CORO_OK when the coroutine is dead;
  *         CORO_EINVAL for NULL arguments or a coroutine this runtime does not
  *         own;
- *         CORO_EDESTROYED when the target already finished and was collected;
+ *         CORO_EAGAIN when the caller cannot park: called from outside any
+ *         runtime coroutine (a plain thread included), or waiting on the
+ *         caller's own handle;
+ *         CORO_EDESTROYED when the target already finished, whether or not
+ *         its handle was collected;
  *         CORO_ECANCELED when the caller's wait was cancelled and the target
  *         had not finished.
  */
@@ -514,9 +519,13 @@ COROCC_API coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m);
 /**
  * coro_rt_mutex_trylock -- acquire a mutex without ever blocking.
  *
+ * The acquire is a bare compare-and-swap, so unlike coro_rt_mutex_lock it
+ * never parks and never reports CORO_ESTALE: it may be called from any
+ * context, and a plain thread outside the runtime can take a free lock (a
+ * held lock reports CORO_EBUSY to it exactly as to a coroutine).
+ *
  * @return CORO_OK when the lock was acquired by this call;
- *         CORO_EBUSY when the mutex is held by another coroutine;
- *         CORO_ESTALE when called outside a runtime coroutine;
+ *         CORO_EBUSY when the lock is already held;
  *         CORO_EINVAL for NULL.
  */
 COROCC_API coro_status coro_rt_mutex_trylock(coro_rt_t* rt,
