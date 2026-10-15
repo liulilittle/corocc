@@ -5,13 +5,16 @@
  *
  * Ping-pongs between the main context and one coroutine: each loop iteration
  * performs one swap main->coroutine and one swap coroutine->main (two
- * context switches per iteration). Reports ns per switch measured with
- * CLOCK_MONOTONIC.
+ * context switches per iteration). Reports ns per switch measured with the
+ * library's own monotone clock, coro_monotonic_ns (src/scheduler/timer.h is
+ * reachable by relative path here; the tests have no src/ on their include
+ * path).
  */
 #include <corocc/coro_ctx.h>
 
+#include "../../src/scheduler/timer.h"
+
 #include <stdio.h>
-#include <time.h>
 
 #define ITERATIONS 5000000u
 
@@ -29,9 +32,7 @@ static void entry(void* arg) {
 }
 
 static double now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
+    return (double)coro_monotonic_ns();
 }
 
 int main(void) {

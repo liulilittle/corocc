@@ -7,14 +7,17 @@
  *   - ns per resume/yield round trip (two context switches plus the claim and
  *     publish compare-and-swaps of the credential protocol),
  *   - ns per create+drive-to-completion+destroy cycle,
- * both with CLOCK_MONOTONIC.
+ * both with the library's own monotone clock, coro_monotonic_ns
+ * (src/scheduler/timer.h is reachable by relative path here; the tests have
+ * no src/ on their include path).
  *
  * Registered as a non-test executable: it reports figures, it asserts none.
  */
 #include <corocc/coro.h>
 
+#include "../../src/scheduler/timer.h"
+
 #include <stdio.h>
-#include <time.h>
 
 #define ROUNDS      2000000u
 #define LIFECYCLES  200000u
@@ -34,9 +37,7 @@ static void entry_finish_immediately(void* arg) {
 }
 
 static double now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
+    return (double)coro_monotonic_ns();
 }
 
 int main(void) {

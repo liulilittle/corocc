@@ -22,7 +22,12 @@
 
 #include "arch/coro_atomic.h"
 
+/* Guarded forward declaration: see scheduler/wsdeque.h for the rationale
+   (single definition among rt.h / wsdeque.h / this header). */
+#ifndef COROCC_FWD_RT_NODE
+#define COROCC_FWD_RT_NODE
 typedef struct rt_node rt_node;
+#endif
 
 typedef struct mpsc {
     rt_node*          head; /**< PRIVATE: CAS target, NULL when empty. */

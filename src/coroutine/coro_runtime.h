@@ -24,14 +24,13 @@
 
 #include <corocc/coro.h>
 #include <corocc/coro_ctx.h>
+#include "platform/coro_plat_locks.h"
 #include "platform/threads.h"
 #include "platform/wait.h"
 
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
-
-typedef struct coro coro_t;
+/* coro_t is typedef'ed by the public header above (coro.h); repeating the
+   typedef here would be a typedef redefinition, which strict C11-only
+   toolchains (NDK clang -Wtypedef-redefinition) reject. */
 
 /** coro_delivery -- one wakeup request handed to a coroutine's owner. */
 typedef struct coro_delivery {
@@ -51,7 +50,7 @@ typedef struct coro_runtime {
     coro_t*         current; /**< PRIVATE: coroutine running here, NULL when none. */
     coro_delivery*  head;    /**< PRIVATE: first pending delivery, NULL when empty. */
     coro_delivery*  tail;    /**< PRIVATE: last pending delivery, NULL when empty. */
-    pthread_mutex_t lock;    /**< PRIVATE: guards the queue, never held across a switch. */
+    coro_plat_mutex_t lock;  /**< PRIVATE: guards the queue, never held across a switch. */
     coro_wait       work;    /**< PRIVATE: raised whenever a delivery is queued. */
 } coro_runtime;
 

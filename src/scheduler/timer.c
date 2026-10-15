@@ -14,25 +14,42 @@
 #include <stdlib.h>
 
 #if defined(_WIN32)
-#include <time.h>
+#include <windows.h>
 #else
 #include <time.h>
 #endif
 
+#if defined(_WIN32)
+/* QueryPerformanceCounter, calibrated once. The frequency is constant for the
+   life of the process, so two threads racing to fill the cache both write the
+   same value; QPC is monotone and is not affected by wall-clock adjustments,
+   which is the contract coro_monotonic_ns promises. */
+static uint64_t coro_qpc_freq; /* 0 until calibrated */
+
+static void coro_qpc_calibrate(void) {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    coro_qpc_freq = (uint64_t)f.QuadPart;
+}
+
+uint64_t coro_monotonic_ns(void) {
+    LARGE_INTEGER c;
+    uint64_t q;
+    if (coro_qpc_freq == 0) coro_qpc_calibrate();
+    QueryPerformanceCounter(&c);
+    q = (uint64_t)c.QuadPart;
+    /* Split conversion: no 128-bit division on this path. Precision is
+       limited by QPF (the tick quantum), not by the arithmetic. */
+    return (q / coro_qpc_freq) * 1000000000ull +
+           ((q % coro_qpc_freq) * 1000000000ull) / coro_qpc_freq;
+}
+#else
 uint64_t coro_monotonic_ns(void) {
     struct timespec ts;
-#if defined(_WIN32)
-    /* TimespecGet(TIME_UTC) is the closest the CRT offers; the Windows
-       high-resolution monotone source arrives with the M9 backend work. */
-    if (timespec_get(&ts, TIME_UTC) != 0) {
-        return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-    }
-    return 0;
-#else
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-#endif
 }
+#endif
 
 void coro_timer_heap_init(coro_timer_heap* h) {
     if (!h) return;

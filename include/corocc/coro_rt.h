@@ -301,9 +301,11 @@ COROCC_API coro_rt_t* coro_rt_create(size_t nthreads);
 /**
  * coro_rt_destroy -- stop every worker and release the runtime.
  *
- * Refuses while coroutines the runtime has NOT yet collected are still live
- * (returns CORO_EBUSY). Run coro_rt_wait_all first, or drive everything to
- * completion. After a successful destroy the runtime handle is invalid.
+ * Refuses while coroutines submitted to this runtime are still live (have
+ * not finished), returning CORO_EBUSY. Run coro_rt_wait_all first, or drive
+ * everything to completion. A coroutine kept alive only by an uncollected
+ * coro_rt_spawn_h handle does not block destruction; collect it before or
+ * after. After a successful destroy the runtime handle is invalid.
  *
  * @param rt  Runtime to destroy; NULL is accepted and ignored.
  * @return CORO_OK on success; CORO_EBUSY when coroutines are still live.
@@ -355,11 +357,17 @@ COROCC_API coro_status coro_rt_spawn_h(coro_rt_t* rt, const coro_attr_t* attr,
  * Releases the handle, stack and bookkeeping of a finished coroutine. Must be
  * called exactly once per handled spawn, like coro_destroy for a manual
  * coroutine; calling it on a coroutine that is still runnable or running is
- * refused with CORO_EBUSY.
+ * refused with CORO_EBUSY. A coroutine that has finished but whose retirement
+ * on the runtime has not completed yet also reports CORO_EBUSY; retry until it
+ * succeeds. When retrying from inside a coroutine, do not spin: yield first
+ * (for example coro_rt_yield()) and retry after it returns. Collect may run
+ * after coro_rt_destroy as well (the contract the destroy note keeps); that
+ * path touches no runtime, only the coroutine handle and its node.
  *
  * @param rt  Runtime that owns the coroutine.
  * @param c   Handle from coro_rt_spawn_h.
- * @return CORO_OK on success; CORO_EBUSY if the coroutine is still live;
+ * @return CORO_OK on success; CORO_EBUSY if the coroutine is still live or
+ *         has finished but not been retired yet -- retry until it succeeds;
  *         CORO_EINVAL for NULL arguments.
  */
 COROCC_API coro_status coro_rt_collect(coro_rt_t* rt, coro_t* c);
@@ -387,12 +395,22 @@ COROCC_API coro_status coro_rt_wait_all(coro_rt_t* rt);
  * the caller waits. Several waiters on one target are all released, and each
  * is resumed exactly once.
  *
+ * A cancellation requested while the caller is parked is observed at its next
+ * safe point, like anywhere else. If the target has finished by then, the
+ * wait condition is satisfied and the call reports CORO_OK; otherwise the
+ * caller is released with CORO_ECANCELED.
+ *
+ * CORO_EDESTROYED covers the target that had already finished before the
+ * caller parked -- whether or not its handle has been collected yet.
+ *
  * @param rt  Runtime that owns the target.
  * @param c   Coroutine to wait for.
  * @return CORO_OK when the coroutine is dead;
  *         CORO_EINVAL for NULL arguments or a coroutine this runtime does not
  *         own;
- *         CORO_EDESTROYED when the target already finished and was collected.
+ *         CORO_EDESTROYED when the target already finished and was collected;
+ *         CORO_ECANCELED when the caller's wait was cancelled and the target
+ *         had not finished.
  */
 COROCC_API coro_status coro_rt_join(coro_rt_t* rt, coro_t* c);
 
@@ -400,7 +418,7 @@ COROCC_API coro_status coro_rt_join(coro_rt_t* rt, coro_t* c);
  * coro_rt_pending -- how many coroutines this runtime still owns.
  *
  * Counts runnable, sleeping and blocked coroutines that were submitted and not
- * yet collected. Zero means the runtime is idle and safe to destroy.
+ * yet finished. Zero means the runtime is idle and safe to destroy.
  *
  * @param rt  Runtime to inspect; NULL returns 0.
  * @return The live coroutine count.

@@ -85,7 +85,12 @@ static void rt_chain_park(void** chain, rt_node* self) {
 }
 
 /* Detach self from the FIFO chain, if still present (assumes act_lock held
-   by the caller). Returns whether self was found on the chain. */
+   by the caller), and retire the park marker with it. Every caller is a
+   cancel branch whose node is the running coroutine leaving a park: a
+   stale RT_PARKED would make the driver drop the node off the run queue at
+   its next plain yield, with no releaser left to requeue it. On a node the
+   releaser already woke (not found here) the clear is a no-op -- that
+   path's driver settle already retired the marker. */
 static void rt_detach(void** chain, rt_node* self) {
     rt_node** p = (rt_node**)chain;
     while (*p) {
@@ -93,10 +98,11 @@ static void rt_detach(void** chain, rt_node* self) {
             *p = self->waiter_next;
             self->waiter_next = NULL;
             node_clear(self, RT_WAITING);
-            return;
+            break;
         }
         p = &(*p)->waiter_next;
     }
+    node_clear(self, RT_PARKED);
 }
 
 /* ---- mutex ------------------------------------------------------------- */

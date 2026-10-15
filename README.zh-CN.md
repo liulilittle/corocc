@@ -14,7 +14,7 @@
 
 | 领域 | 状态 |
 | --- | --- |
-| 分层 | L0 上下文原语已实现(`coro_stack`、`coro_ctx`);L1 协程对象(含 token 凭证协议)、L2 运行时内核(M:N 工作窃取调度、同步原语、IO 事件循环)、L3 结构化并发、C++11 高级封装为后续里程碑 |
+| 分层 | L0-L3 已实现:上下文原语(`coro_stack`、`coro_ctx`)、协程对象、M:N 工作窃取运行时(含同步原语)、结构化并发 scope 层;C++11 高级封装与 Windows 移植为后续里程碑 |
 | 架构 | x86_64(SysV)与 aarch64(AAPCS)汇编已 vendored;aarch64 经 `qemu-aarch64` 验证 |
 | 保护页 | 每个协程栈映射一个 `PROT_NONE` 守护页,溢出即触发缺页而不是破坏相邻内存 |
 | 消毒器 | ASan fiber-switch 钩子(`COROCC_ASAN`);ASan 下全部测试通过,含启用栈用后即返回检测 |
@@ -216,10 +216,36 @@ channel 在满时 `trysend` 与空时 `tryrecv` 返回 `CORO_EBUSY`,
 关闭并排空后返回 `CORO_ECLOSED`。完整契约见
 `include/corocc/coro_rt.h`。
 
+## 结构化并发(L3)
+
+scope 持有一组子协程并赋予它们同一条生命线:wait 族只有在该 scope 接纳过
+的每一个子都已结束并完成回收之后,才报告完成。scope 对象可按值内嵌;零初
+始化即 OPEN 态。
+
+```c
+#include <corocc/coro_scope.h>
+
+coro_rt_scope_t s;
+memset(&s, 0, sizeof s);                  /* OPEN */
+coro_rt_scope_spawn(rt, &s, NULL, work, arg, NULL);   /* 子 */
+coro_rt_spawn(rt, NULL, waiter_entry, &s);            /* 等待者协程 */
+coro_rt_wait_all(rt);                     /* 等待者内执行 wait(rt, &s) */
+coro_rt_scope_destroy(&s);                /* drain 之后 */
+```
+
+wait 族有两种入口:协程调用时等待者挂在 scope 事件链上;普通线程调用时阻塞
+于运行时条件变量(**绝不报 `CORO_EAGAIN`**)——"主线程 spawn 后收口"可直接
+使用。两条调用方责任为契约而非建议:wait 对自身取消免疫(永远以
+`live == 0` 结束);`coro_rt_scope_cancel` 只保证即时打断 running/sleeping
+的子——阻塞在同步原语上的子仅在其等待事件发生时观察取消,子互等 + 全取消
+可能使 wait 不终止。完整契约、状态机与看门狗设计见
+[docs/api/coro_scope.zh-CN.md](docs/api/coro_scope.zh-CN.md)。
+
 ## 已知限制
 
-- **范围:**目前只交付 L0 层。协程对象与 token 凭证协议、带工作窃取的
-  M:N 调度器与 IO 事件循环、结构化并发、C++11 封装均为后续里程碑。
+- **范围:**目前交付 L0-L3 层(上下文原语、含 token 凭证协议的协程对象、
+  带工作窃取的 M:N 运行时与同步原语、结构化并发 scope 层)。C++11 封装、
+  IO 事件循环与 Windows(MSVC)移植为后续里程碑。
 - **架构:**x86_64 与 aarch64 已完成 vendored 与测试;计划中的其余 ISA
   (i386、arm32/armeb、mips、ppc、s390x、riscv 及大端变体)尚未接入构建。
 - **线程:**`coro_ctx` 不是线程安全的 —— 同一时刻必须由单一线程切换

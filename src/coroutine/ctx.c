@@ -66,7 +66,11 @@ static void ctx_trampoline(coro_transfer t) {
     }
 #endif
     corocc_asm_jump(cx->back->fctx, NULL);
+#if defined(_MSC_VER)
+    __assume(0); /* unreachable */
+#else
     __builtin_trap(); /* unreachable */
+#endif
 }
 
 int coro_ctx_init(coro_ctx* cx, const coro_stack* stk,

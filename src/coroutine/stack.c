@@ -1,21 +1,29 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * src/coroutine/stack.c -- guarded stack allocation (POSIX mmap branch).
+ * src/coroutine/stack.c -- guarded stack allocation.
  *
  * A coroutine stack is a contiguous mapping of `usable` bytes plus one
  * guard page placed at the *low* address end. Stacks grow downward on
  * every ABI we support, so an overflow writes below `lo` and lands in the
- * PROT_NONE guard page, producing a diagnosable fault (SIGSEGV) instead of
- * silently corrupting neighbouring memory.
+ * guard page, producing a diagnosable fault -- SIGSEGV on POSIX, an
+ * access violation (0xC0000005) on Windows -- instead of silently
+ * corrupting neighbouring memory. The POSIX branch maps with
+ * mmap/mprotect; the Windows branch reserves with VirtualAlloc and turns
+ * the low page into PAGE_NOACCESS with VirtualProtect. Both branches fill
+ * the same five fields with the same meaning.
  *
  * `struct coro_stack` is a complete public type defined in
  * <corocc/coro_stack.h>; it is never redefined here (no internal.h).
  */
 #include <corocc/coro_stack.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 #include <stdint.h>
 #include <string.h>
 
@@ -35,29 +43,71 @@ coro_status coro_stack_alloc(coro_stack* s, size_t size) {
 
     if (size == 0) size = COROCC_DEFAULT_STACK_BYTES;
 
-    long ps = sysconf(_SC_PAGESIZE);
-    if (ps <= 0) return CORO_ENOMEM;
+#if defined(_WIN32)
+    {
+        SYSTEM_INFO si;
+        size_t guard;
+        size_t usable;
+        size_t total;
+        void* base;
+        DWORD old_protect = 0;
 
-    size_t guard = (size_t)ps;
-    size_t usable = (size + guard - 1) & ~(guard - 1);
-    if (usable < guard * 2u) return CORO_EINVAL; /* too small: need >= 2 pages usable */
+        GetSystemInfo(&si);
+        if (si.dwPageSize == 0) return CORO_ENOMEM;
+        guard = (size_t)si.dwPageSize;
+        usable = (size + guard - 1) & ~(guard - 1);
+        if (usable < guard * 2u) return CORO_EINVAL; /* too small: need >= 2 pages usable */
 
-    size_t total = usable + guard;
-    void* base = mmap(NULL, total, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (base == MAP_FAILED) return CORO_ENOMEM;
+        total = usable + guard;
+        base = VirtualAlloc(NULL, total, MEM_RESERVE | MEM_COMMIT,
+                            PAGE_READWRITE);
+        if (!base) return CORO_ENOMEM;
 
-    if (mprotect(base, guard, PROT_NONE) != 0) {
-        munmap(base, total);
-        return CORO_ENOMEM;
+        /* The guard page sits at the low address end; the stack grows down
+           into it. */
+        if (!VirtualProtect(base, guard, PAGE_NOACCESS, &old_protect)) {
+            VirtualFree(base, 0, MEM_RELEASE);
+            return CORO_ENOMEM;
+        }
+
+        s->base = base;
+        s->total = total;
+        s->lo = (char*)base + guard;
+        s->usable = usable;
+        s->guard_bytes = guard;
+        return CORO_OK;
     }
+#else
+    {
+        long ps = sysconf(_SC_PAGESIZE);
+        size_t guard;
+        size_t usable;
+        size_t total;
+        void* base;
 
-    s->base = base;
-    s->total = total;
-    s->lo = (char*)base + guard;
-    s->usable = usable;
-    s->guard_bytes = guard;
-    return CORO_OK;
+        if (ps <= 0) return CORO_ENOMEM;
+        guard = (size_t)ps;
+        usable = (size + guard - 1) & ~(guard - 1);
+        if (usable < guard * 2u) return CORO_EINVAL; /* too small: need >= 2 pages usable */
+
+        total = usable + guard;
+        base = mmap(NULL, total, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (base == MAP_FAILED) return CORO_ENOMEM;
+
+        if (mprotect(base, guard, PROT_NONE) != 0) {
+            munmap(base, total);
+            return CORO_ENOMEM;
+        }
+
+        s->base = base;
+        s->total = total;
+        s->lo = (char*)base + guard;
+        s->usable = usable;
+        s->guard_bytes = guard;
+        return CORO_OK;
+    }
+#endif
 }
 
 /**
@@ -67,7 +117,11 @@ coro_status coro_stack_alloc(coro_stack* s, size_t size) {
  */
 void coro_stack_free(coro_stack* s) {
     if (!s || !s->base) return;
+#if defined(_WIN32)
+    VirtualFree(s->base, 0, MEM_RELEASE);
+#else
     munmap(s->base, s->total);
+#endif
     memset(s, 0, sizeof *s);
 }
 

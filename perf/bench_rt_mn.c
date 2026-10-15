@@ -1,8 +1,10 @@
 #include <corocc/coro.h>
 #include <corocc/coro_rt.h>
+
+#include "../src/scheduler/timer.h" /* coro_monotonic_ns; no src/ on the include path */
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 #define COROS 200u
 #define ITERS 100u
@@ -18,9 +20,7 @@ static void entry_count(void* pv) {
 }
 
 static uint64_t now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    return coro_monotonic_ns();
 }
 
 int main(void) {

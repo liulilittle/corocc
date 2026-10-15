@@ -15,7 +15,7 @@ Milestone 1 (skeleton + L0 execution contexts) is complete:
 
 | Area | State |
 | --- | --- |
-| Layers | L0 context primitives implemented (`coro_stack`, `coro_ctx`); L1 coroutine objects, L2 runtime/scheduler, L3 structured concurrency and the C++11 wrapper are planned follow-ups |
+| Layers | L0-L3 implemented: context primitives (`coro_stack`, `coro_ctx`), coroutine objects, the M:N work-stealing runtime with synchronization primitives, and the structured-concurrency scope layer; the C++11 wrapper and the Windows port are follow-ups |
 | Architectures | x86_64 (SysV) and aarch64 (AAPCS) vendored assembly; aarch64 verified under `qemu-aarch64` |
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
 | Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`); clean under ASan, including stack-use-after-return detection |
@@ -204,6 +204,35 @@ and `CORO_ECANCELED` when a wait is cut short. The channel reports
 once it is closed and drained. A full contract lives in the headers under
 `include/corocc/coro_rt.h`.
 
+## Structured concurrency (L3)
+
+A scope owns a set of child coroutines and gives them one lifetime: the wait
+family only reports done once every child the scope accepted has finished and
+been collected. The scope object is embeddable by value; a zero-initialized
+scope is the OPEN state.
+
+```c
+#include <corocc/coro_scope.h>
+
+coro_rt_scope_t s;
+memset(&s, 0, sizeof s);                  /* OPEN */
+coro_rt_scope_spawn(rt, &s, NULL, work, arg, NULL);   /* child */
+coro_rt_spawn(rt, NULL, waiter_entry, &s);            /* waiter coroutine */
+coro_rt_wait_all(rt);                     /* the waiter runs wait(rt, &s) */
+coro_rt_scope_destroy(&s);                /* after the drain */
+```
+
+Both entries of the wait family are supported: from a coroutine the waiter
+parks on the scope's event chain; from a plain thread it blocks on the
+runtime's condition (never `CORO_EAGAIN`), so a "spawn, then wait from main"
+close-out works directly. Two caller responsibilities are contract, not
+advice: the wait is immune to its own waiter's cancellation (it always ends on
+`live == 0`), and `coro_rt_scope_cancel` only guarantees to interrupt running
+or sleeping children -- a child blocked in a sync primitive observes the
+request only when its event happens, and children waiting on each other under
+a full cancel may keep a wait alive. The full contract, the state machine and
+the watchdog design live in [docs/api/coro_scope.md](docs/api/coro_scope.md).
+
 ## Multithreading
 
 A coroutine belongs to the thread that first drove it. A wakeup requested from
@@ -233,9 +262,11 @@ full cross-thread contract and the concurrency test matrix.
 
 ## Known limitations
 
-- **Scope:** only the L0 layer ships today. Coroutine objects with the token
-  credential protocol, the M:N scheduler with work stealing and the IO loop,
-  structured concurrency and the C++11 wrapper are follow-up milestones.
+- **Scope:** the L0-L3 layers ship today (context primitives, coroutine
+  objects with the token credential protocol, the M:N work-stealing runtime
+  with its synchronization primitives and the structured-concurrency scope
+  layer). The C++11 wrapper, the IO loop and the Windows (MSVC) port are
+  follow-up milestones.
 - **Architectures:** x86_64 and aarch64 are vendored and tested; the rest of
   the planned ISA matrix (i386, arm32/armeb, mips, ppc, s390x, riscv,
   big-endian variants) is not yet wired into the build.

@@ -1,0 +1,116 @@
+/*
+ * corocc -- a zero-dependency C/C++ coroutine library.
+ *
+ * src/platform/coro_plat_locks.c -- internal lock/condition shim (M9).
+ *
+ * Thin forwards only; see coro_plat_locks.h for the contract. The Windows
+ * side follows the shape verified by the M9 design probe D: SRWLOCK plus
+ * CONDITION_VARIABLE, relative-millisecond timeout conversion clamped to
+ * [1, INFINITE-1], and a past deadline reported as an immediate timeout.
+ * Windows timers are tick-slaved -- SleepConditionVariableSRW may fire a
+ * little before or after the requested duration -- so the timed wait re-arms
+ * until the absolute deadline has truly passed; the POSIX branch reports the
+ * timeout no earlier than its deadline, and the Windows branch keeps that
+ * property.
+ */
+#include "platform/coro_plat_locks.h"
+
+#include "scheduler/timer.h" /* coro_monotonic_ns */
+
+#if defined(_WIN32)
+
+void coro_plat_mutex_lock(coro_plat_mutex_t* m) {
+    AcquireSRWLockExclusive(m);
+}
+
+void coro_plat_mutex_unlock(coro_plat_mutex_t* m) {
+    ReleaseSRWLockExclusive(m);
+}
+
+int coro_plat_cond_init(coro_plat_cond_t* cv) {
+    if (!cv) return -1;
+    InitializeConditionVariable(cv);
+    return 0;
+}
+
+int coro_plat_cond_wait(coro_plat_cond_t* cv, coro_plat_mutex_t* m) {
+    if (!cv || !m) return -1;
+    return SleepConditionVariableSRW(cv, m, INFINITE, 0) ? 0 : -1;
+}
+
+int coro_plat_cond_broadcast(coro_plat_cond_t* cv) {
+    if (!cv) return -1;
+    WakeAllConditionVariable(cv);
+    return 0;
+}
+
+int coro_plat_cond_timedwait_ns(coro_plat_cond_t* cv, coro_plat_mutex_t* m,
+                                uint64_t deadline_ns) {
+    if (!cv || !m) return 1;
+    for (;;) {
+        uint64_t now = coro_monotonic_ns();
+        uint64_t ms;
+        if (now >= deadline_ns) return 1; /* past deadline: timeout now */
+        /* Round up to the next millisecond so a positive remainder never
+           turns into a zero-millisecond (immediate) wait, then clamp: a
+           relative wait of INFINITE would never expire, so the maximum is
+           INFINITE-1. */
+        ms = (deadline_ns - now + 999999ull) / 1000000ull;
+        if (ms > 0xFFFFFFFEull) ms = 0xFFFFFFFEull; /* INFINITE - 1 */
+        if (ms == 0) ms = 1;
+        if (SleepConditionVariableSRW(cv, m, (DWORD)ms, 0)) return 0;
+        /* Windows timers are tick-slaved: a timeout may fire a little before
+           the requested duration elapsed. Re-arm until the deadline actually
+           passed, so the timeout keeps the POSIX contract of never being
+           reported before the absolute deadline. */
+    }
+}
+
+#else /* !_WIN32 */
+
+void coro_plat_mutex_lock(coro_plat_mutex_t* m) {
+    pthread_mutex_lock(m);
+}
+
+void coro_plat_mutex_unlock(coro_plat_mutex_t* m) {
+    pthread_mutex_unlock(m);
+}
+
+int coro_plat_cond_init(coro_plat_cond_t* cv) {
+    pthread_condattr_t attr;
+    if (!cv) return -1;
+    if (pthread_condattr_init(&attr) != 0) return -1;
+    /* Bind the condition variable to the monotone clock so timed waits use
+       the same scale as the scheduler's timer deadlines. */
+    if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) {
+        pthread_condattr_destroy(&attr);
+        return -1;
+    }
+    if (pthread_cond_init(cv, &attr) != 0) {
+        pthread_condattr_destroy(&attr);
+        return -1;
+    }
+    pthread_condattr_destroy(&attr);
+    return 0;
+}
+
+int coro_plat_cond_wait(coro_plat_cond_t* cv, coro_plat_mutex_t* m) {
+    if (!cv || !m) return -1;
+    return pthread_cond_wait(cv, m) == 0 ? 0 : -1;
+}
+
+int coro_plat_cond_broadcast(coro_plat_cond_t* cv) {
+    if (!cv) return -1;
+    return pthread_cond_broadcast(cv) == 0 ? 0 : -1;
+}
+
+int coro_plat_cond_timedwait_ns(coro_plat_cond_t* cv, coro_plat_mutex_t* m,
+                                uint64_t deadline_ns) {
+    struct timespec ts;
+    if (!cv || !m) return 1;
+    ts.tv_sec = (time_t)(deadline_ns / 1000000000ull);
+    ts.tv_nsec = (long)(deadline_ns % 1000000000ull);
+    return pthread_cond_timedwait(cv, m, &ts) == 0 ? 0 : 1;
+}
+
+#endif /* !_WIN32 */

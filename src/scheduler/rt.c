@@ -50,6 +50,15 @@ static void node_clear(rt_node* n, unsigned bit) {
     (void)coro_at_and((volatile uint64_t*)&n->flags, ~(uint64_t)bit);
 }
 
+/* Publish form: a RELEASE fetch_or. Unlike node_set (relaxed), every write
+   this thread made before the OR -- the wait-chain detach and the retained
+   reading in retire_node's critical section -- is visible to the thread
+   whose ACQUIRE load observes the bit. Used for exactly one write: the
+   retire's RT_DONE publication, which must be the last write to the node. */
+static void node_set_rel(rt_node* n, unsigned bit) {
+    (void)coro_at_or_release((volatile uint64_t*)&n->flags, bit);
+}
+
 /* Atomically clear one bit. Returns 1 when this call cleared it, 0 when it
    was already clear. Used as the single-requeue gate: a parked node -- parked
    inside a sync primitive or in the timer heap or in a join chain -- is
@@ -130,6 +139,11 @@ static void drain_inbox(rt_worker* w) {
 /* Move every node whose deadline has passed from this worker's timer heap to
    its runnable deque. Owner-only. */
 static void collect_expired(rt_worker* w) {
+    /* Empty-heap short circuit: with no deadline pending there is nothing to
+       expire, so the run loop must not pay the monotone-clock read (a virtual-
+       syscall on Linux) just to learn that. The heap is worker-private, so the
+       count load needs no synchronization. */
+    if (w->sleepers.count == 0) return;
     uint64_t now = coro_monotonic_ns();
     for (;;) {
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
@@ -157,18 +171,38 @@ static coro_status rt_claim(rt_node* n, coro_token* next) {
 /* A node whose coroutine finished: release the wait chain and reclaim memory
    unless the caller keeps the handle. */
 static void retire_node(coro_rt_t* rt, rt_node* n) {
-    rt_node* waiter = n->waiter_next;
+    /* Detach the wait chain under the activity lock, the same lock a joiner
+       holds while appending to it: without it a join that linked itself
+       between the check and the append could land on a chain this walk is
+       consuming, and its waiter would never be woken. The wake itself runs
+       outside the lock (rt_node_wake re-takes it to signal), the same
+       broadcast shape the sync primitives use. The retained reading belongs
+       in that same critical section, and the publication is the RELEASE
+       fetch_or that follows the detach, still inside the lock: it is the
+       last write to the node, so whoever observes RT_DONE -- the collector
+       via an acquire load, or a joiner re-checking under this same lock --
+       observes the chain already detached and the retained reading already
+       made. A retained node is left completely untouched from here on; the
+       collector that observed RT_DONE owns the reclaim. A non-retained node
+       has no external handle and cannot be collected concurrently, so this
+       worker still frees it exclusively. */
+    rt_node* waiter;
+    int retained;
+    pthread_mutex_lock(&rt->act_lock);
+    retained = node_test(n, RT_RETAINED);
+    waiter = n->waiter_next;
     n->waiter_next = NULL;
+    node_set_rel(n, RT_DONE);   /* publish: retire's LAST write to n */
+    pthread_mutex_unlock(&rt->act_lock);
     while (waiter) {
         rt_node* next = waiter->waiter_next;
         waiter->waiter_next = NULL;
         rt_node_wake(rt, waiter);
         waiter = next;
     }
-    node_set(n, RT_DONE);
     live_add(rt, -1);
     live_notify(rt);
-    if (!node_test(n, RT_RETAINED)) {
+    if (!retained) {
         coro_destroy(n->coro);
         free(n);
     }
@@ -360,10 +394,25 @@ coro_status coro_rt_collect(coro_rt_t* rt, coro_t* c) {
     if (!rt || !c) return CORO_EINVAL;
     rt_node* n = (rt_node*)coro_get_sched_tag(c);
     if (!n) return CORO_EINVAL;
-    if (coro_get_state(c) != CORO_DEAD) return CORO_EBUSY;
-    node_set(n, RT_DONE);
-    live_add(rt, -1);
-    live_notify(rt);
+    /* V4 form: the reclaim gate is an ACQUIRE load of RT_DONE. The retire
+       published that bit with a RELEASE fetch_or as its LAST write to the
+       node (inside act_lock, after the chain detach), so the acquire here
+       is what makes the retire's earlier writes visible -- aarch64
+       included. The gate never touches the runtime, so a collect that runs
+       after coro_rt_destroy (a contract the public header keeps) has no
+       freed-runtime dereference: only the coroutine handle and its node are
+       read. The coroutine's own DEAD state is deliberately NOT a gate: the
+       settle publishes it before the worker has retired the node, and
+       freeing then raced the retire's own access to the node (D25, a
+       use-after-free). A coroutine that finished but whose retirement has
+       not run (yet) therefore reports EBUSY; the caller retries -- from
+       inside a coroutine, by yielding first, never by spinning -- and the
+       retire completes promptly. */
+    if (!node_test(n, RT_DONE)) return CORO_EBUSY;
+    /* Pure reclamation: the live count was already decremented once, by the
+       retire that ran when the coroutine finished. Decrementing here as well
+       would count the same spawn twice and underflow the count, so collect
+       only releases the handle, the coroutine and the bookkeeping. */
     coro_set_sched_tag(c, NULL);
     coro_destroy(c);
     free(n);
@@ -392,11 +441,64 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
     coro_t* cur = coro_runtime_current()->current;
     rt_node* self = cur ? (rt_node*)coro_get_sched_tag(cur) : NULL;
     if (!self || self == target) return CORO_EAGAIN;
+
+    /* Append under the activity lock and re-check there, the slow-path shape
+       the sync primitives use: a target that finished between the checks
+       above and this append reports EDESTROYED instead of parking on a
+       chain nobody will walk again, and the retire walk can never consume
+       the chain between the check and the append. */
+    pthread_mutex_lock(&rt->act_lock);
+    if (node_test(target, RT_DONE) || coro_get_state(c) == CORO_DEAD) {
+        pthread_mutex_unlock(&rt->act_lock);
+        return CORO_EDESTROYED;
+    }
     self->waiter_next = target->waiter_next;
     target->waiter_next = self;
     node_set(self, RT_WAITING);
     node_set(self, RT_PARKED);
-    return coro_yield();
+    pthread_mutex_unlock(&rt->act_lock);
+
+    coro_status st = coro_yield();
+    if (st != CORO_OK) {
+        /* Cancelled before or at the park: the yield consumed the request
+           without switching out, so this node is (or was a moment ago) on
+           the target's chain. Detach it under the activity lock, exactly
+           like every primitive park site does, or the target's retire would
+           walk this node after the coroutine freed it. A retire that beat us
+           has already unlinked the whole chain; detaching what is not there
+           is a no-op. */
+        pthread_mutex_lock(&rt->act_lock);
+        rt_node** p = &target->waiter_next;
+        while (*p) {
+            if (*p == self) {
+                *p = self->waiter_next;
+                self->waiter_next = NULL;
+                break;
+            }
+            p = &(*p)->waiter_next;
+        }
+        node_clear(self, RT_WAITING);
+        /* RT_PARKED must go too: the driver reads it when this drive
+           settles, and a stale marker makes it drop the node off the run
+           queue with no releaser left to requeue it -- a following plain
+           yield would strand the coroutine. The bit is only meaningful
+           while the coroutine is between a park and its releaser's
+           requeue; this branch leaves the node running and off every
+           chain, so neither holds. (Same shape as sched_join's wait-flag
+           clear in sched.c.) */
+        node_clear(self, RT_PARKED);
+        /* B-2' retry: the target may have finished while the cancellation
+           was in flight (it only ever surfaces here, at the safe point).
+           The wait condition is then satisfied, so the join reports the
+           outcome instead of the cancellation. */
+        coro_status ret = st;
+        if (node_test(target, RT_DONE) || coro_get_state(c) == CORO_DEAD) {
+            ret = CORO_OK;
+        }
+        pthread_mutex_unlock(&rt->act_lock);
+        return ret;
+    }
+    return CORO_OK;
 }
 
 size_t coro_rt_pending(const coro_rt_t* rt) {
@@ -415,7 +517,26 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
     node_set(n, RT_PARKED);
     /* The heap belongs to the worker driving us; it is the only writer. */
     coro_timer_heap_push(&n->worker->sleepers, &n->timer);
-    return coro_yield();
+    coro_status st = coro_yield();
+    if (st != CORO_OK) {
+        /* Cancelled at the park's safe point. The heap removal below is
+           unconditional and owner-safe: coro_timer_heap_remove refuses a
+           node that is not a member of the heap (a checked no-op,
+           timer.c:128), and a node that IS a member sits in this worker's
+           heap, whose only writer is the thread running this coroutine
+           (the yield never switched out on this path). Only the pre-park
+           cancellation can find the entry here; taking the deadline out
+           matters then, or the heap would fire it later and drive this
+           node a second time -- after it moved on, possibly after it was
+           freed. On a path that did switch out, the driver settle or the
+           releaser already retired the markers, and repeating the clears
+           is idempotent. The bits go too, for the same reason the other
+           park sites clear them. */
+        coro_timer_heap_remove(&n->worker->sleepers, &n->timer);
+        node_clear(n, RT_WAITING);
+        node_clear(n, RT_PARKED);
+    }
+    return st;
 }
 
 coro_status coro_rt_yield(void) {
@@ -430,13 +551,23 @@ coro_status coro_rt_cancel(coro_rt_t* rt, coro_t* c) {
     if (st != CORO_OK) return st;
     /* If the coroutine is parked on a deadline, hand the node to its worker's
        inbox so it wakes now instead of at its deadline. The owner worker
-       removes the heap entry under its own ownership. */
-    if (node_test(n, RT_WAITING) && !node_test(n, RT_WAKE_REQ)) {
-        node_set(n, RT_WAKE_REQ);
-        mpsc_push(&n->worker->inbox, n);
-        signal_activity(rt);
+       removes the heap entry under its own ownership. The claim is one atomic
+       test-and-set on the flags word (the mirror of node_cas_clear): two
+       concurrent cancels cannot both push the node, or the second push would
+       relink mpsc next to a stale head and hang the worker's drain (the
+       node's self-loop, n->next == n, hands it out over and over). */
+    uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
+    for (;;) {
+        if (!(cur & RT_WAITING) || (cur & RT_WAKE_REQ)) return CORO_OK;
+        uint64_t exp = cur;
+        if (coro_at_cas((volatile uint64_t*)&n->flags, &exp,
+                        cur | RT_WAKE_REQ)) {
+            mpsc_push(&n->worker->inbox, n);
+            signal_activity(rt);
+            return CORO_OK;
+        }
+        cur = exp; /* lost: exp now holds the observed value */
     }
-    return CORO_OK;
 }
 
 coro_status coro_rt_destroy(coro_rt_t* rt) {

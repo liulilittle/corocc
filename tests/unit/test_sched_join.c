@@ -1,4 +1,5 @@
 #include "../harness.h"
+#include "coroutine/coro_runtime.h"   /* internal: the current coroutine */
 #include <corocc/coro_sched.h>
 
 #include <string.h>
@@ -37,6 +38,25 @@ static void entry_waiter(void* arg) {
         ++g_waiter_back[id];
         ++g_waiter_order;
     }
+}
+
+/* A joiner cancelled before its park: the yield consumes the request
+   without switching, so the node is linked on the target's chain at that
+   point; the join must unlink it or the target's retire walks it freed. */
+static coro_t*      g_c_target;
+static coro_status  g_c_joiner_st;
+
+static void entry_c_target(void* arg) {
+    (void)arg;
+    for (unsigned i = 0; i < 3u; ++i) {
+        if (coro_yield() != CORO_OK) return;
+    }
+}
+
+static void entry_c_joiner(void* arg) {
+    (void)arg;
+    coro_cancel(coro_runtime_current()->current);
+    g_c_joiner_st = coro_sched_join(g_sched, g_c_target);
 }
 
 static void run_tests(void) {
@@ -88,6 +108,19 @@ static void run_tests(void) {
         CHECK(coro_sched_spawn_h(s, NULL, entry_target, NULL, &spare) == CORO_OK);
         CHECK(coro_sched_join(s, spare) == CORO_ESTALE); /* not inside a coroutine */
         CHECK(coro_sched_wait_all(s) == CORO_OK);        /* then let it finish */
+    }
+
+    /* ---------- a joiner cancelled before its park unlinks ---------- */
+    {
+        coro_t* ctarget = NULL;
+        g_c_target = NULL;
+        g_c_joiner_st = CORO_OK;
+        CHECK(coro_sched_spawn_h(s, NULL, entry_c_target, NULL, &ctarget) == CORO_OK);
+        g_c_target = ctarget;
+        CHECK(coro_sched_spawn(s, NULL, entry_c_joiner, NULL) == CORO_OK);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        CHECK(g_c_joiner_st == CORO_ECANCELED);
+        CHECK(coro_sched_pending(s) == 0);
     }
 
     /* ---------- invalid arguments ---------- */

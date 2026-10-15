@@ -129,12 +129,15 @@ typedef struct coro coro_t;
  * The allocator must remain valid for the lifetime of every coroutine created
  * with it. All callbacks must be thread-safe.
  */
-typedef struct coro_allocator {
+/* The typedef lives at the top of this header (next to coro_t); defining the
+   struct again with a trailing typedef here would redefine the name, which
+   strict C11-only toolchains (NDK clang -Wtypedef-redefinition) reject. */
+struct coro_allocator {
     coro_status (*alloc_stack)(void** mem, size_t size);
     void        (*free_stack)(void* mem);
     void*       (*alloc_handle)(size_t size);
     void        (*free_handle)(void* p);
-} coro_allocator_t;
+};
 
 /**
  * coro_attr_default -- the default attributes.

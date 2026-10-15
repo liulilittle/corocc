@@ -71,6 +71,16 @@ static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
     return __atomic_fetch_or(p, v, __ATOMIC_RELAXED);
 }
 
+/* Release-OR: the publication form for the retire's RT_DONE write (D25/V4).
+   A relaxed fetch_or latches the bit; the RELEASE ordering additionally
+   publishes every write this thread made before it (the wait-chain detach
+   and the retained reading) to the thread whose ACQUIRE load observes the
+   bit. The MSVC interlocked OR is already a full barrier, so it needs no
+   separate form. */
+static inline uint64_t coro_at_or_release(volatile uint64_t* p, uint64_t v) {
+    return __atomic_fetch_or(p, v, __ATOMIC_RELEASE);
+}
+
 /* Bitwise-AND, relaxed: the mirror of coro_at_or for clearing flags. */
 static inline uint64_t coro_at_and(volatile uint64_t* p, uint64_t v) {
     return __atomic_fetch_and(p, v, __ATOMIC_RELAXED);
@@ -134,6 +144,13 @@ static inline uint64_t coro_at_exchange(volatile uint64_t* p, uint64_t v) {
 }
 
 static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
+    return (uint64_t)_InterlockedOr64((volatile long long*)p, (long long)v);
+}
+
+/* Release-OR: see the GCC/Clang note above. The interlocked OR already
+   carries release semantics (it is a full barrier), so the same intrinsic
+   serves. */
+static inline uint64_t coro_at_or_release(volatile uint64_t* p, uint64_t v) {
     return (uint64_t)_InterlockedOr64((volatile long long*)p, (long long)v);
 }
 

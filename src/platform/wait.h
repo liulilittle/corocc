@@ -9,23 +9,21 @@
  * A caller that hands a wakeup request to another thread needs to wait until
  * that thread has handled it. The wait is a condition variable, never a spin:
  * the waiting thread sleeps and is woken by the handler, and it re-checks the
- * completion flag so spurious wakeups cannot pass for completion.
+ * completion flag so spurious wakeups cannot pass for completion. The lock
+ * pair comes from the platform shim: pthreads on POSIX, SRWLOCK plus
+ * CONDITION_VARIABLE on Windows.
  *
  * This header is INTERNAL: it is not installed and is not part of the public
  * API or ABI.
  */
-#if defined(_WIN32)
-/* Windows arrives with milestone M9 together with its CI. */
-#error "corocc: the Windows wait backend arrives with milestone M9"
-#else
-
-#include <pthread.h>
 #include <stdint.h>
 
+#include "platform/coro_plat_locks.h"
+
 typedef struct coro_wait {
-    pthread_mutex_t lock;
-    pthread_cond_t  cond;
-    int             done;
+    coro_plat_mutex_t lock;
+    coro_plat_cond_t  cond;
+    int               done;
 } coro_wait;
 
 /** coro_wait_init -- prepare a reusable completion signal. */
@@ -67,5 +65,4 @@ int coro_wait_raise(coro_wait* w);
  */
 int coro_wait_reset(coro_wait* w);
 
-#endif /* !_WIN32 */
 #endif /* COROCC_PLATFORM_WAIT_H */

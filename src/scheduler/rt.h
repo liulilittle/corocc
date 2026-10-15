@@ -100,7 +100,9 @@ typedef struct coro_rt {
     uint64_t        act_gen;      /**< bumped whenever a node becomes runnable. */
     pthread_cond_t  act_cond;     /**< idle workers sleep here (monotone). */
     pthread_cond_t  settled;      /**< raises when live == 0 (wait_all). */
-    uint64_t        live;         /**< nodes not yet retired/collected (atomic). */
+    uint64_t        live;         /**< coroutines not yet finished (retired); a
+                                       finished retained handle no longer
+                                       counts (atomic). */
     size_t          spawn_seq;    /**< round-robin spawn distribution. */
 } coro_rt_t;
 

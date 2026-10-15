@@ -22,8 +22,11 @@
 #include "arch/coro_tls.h"
 #include "platform/threads.h"
 
-#include <pthread.h>
 #include <stdlib.h>
+
+#if !defined(_WIN32)
+#include <pthread.h> /* pthread_mutex_init/destroy for the POSIX build */
+#endif
 
 /* Threads are numbered in the order they first touch the library. The counter
    is monotone and never reused, so an identity stays unique for the life of
@@ -55,7 +58,12 @@ coro_runtime* coro_runtime_current(void) {
         abort();
     }
     r->id = coro_at_fetch_add(&g_next_id, 1) + 1;
+#if defined(_WIN32)
+    /* The lock is a SRWLOCK zero-initialized by calloc: ready to use as-is
+       (MSDN); there is no init call to make on this platform. */
+#else
     pthread_mutex_init(&r->lock, NULL);
+#endif
     coro_wait_init(&r->work);
     tls_runtime = r;
     coro_runtime_register(r);
@@ -67,21 +75,21 @@ void coro_runtime_enqueue(coro_runtime* r, coro_delivery* node) {
     if (!r) return;
     node->next = NULL;
 
-    pthread_mutex_lock(&r->lock);
+    coro_plat_mutex_lock(&r->lock);
     if (q_load(&r->tail) == NULL) {
         q_store(&r->head, node);
     } else {
         q_store(&r->tail->next, node);
     }
     q_store(&r->tail, node);
-    pthread_mutex_unlock(&r->lock);
+    coro_plat_mutex_unlock(&r->lock);
     coro_wait_raise(&r->work); /* wake the owner out of coro_pump_wait */
 }
 
 coro_delivery* coro_runtime_pop(coro_runtime* r) {
     if (!r) return NULL;
 
-    pthread_mutex_lock(&r->lock);
+    coro_plat_mutex_lock(&r->lock);
     coro_delivery* first = (coro_delivery*)q_load(&r->head);
     if (first) {
         coro_delivery* next = q_load(&first->next);
@@ -92,7 +100,7 @@ coro_delivery* coro_runtime_pop(coro_runtime* r) {
             q_store(&r->head, next);
         }
     }
-    pthread_mutex_unlock(&r->lock);
+    coro_plat_mutex_unlock(&r->lock);
     return first;
 }
 
@@ -112,7 +120,12 @@ struct registry_entry {
     coro_runtime*  rt;
 };
 
-static pthread_mutex_t     g_reg_lock = PTHREAD_MUTEX_INITIALIZER;
+static coro_plat_mutex_t g_reg_lock =
+#if defined(_WIN32)
+    {0}; /* SRWLOCK: a statically zero-initialized lock is ready to use (MSDN) */
+#else
+    PTHREAD_MUTEX_INITIALIZER;
+#endif
 static struct registry_entry* g_reg;
 static size_t              g_reg_count;
 static size_t              g_reg_cap;
@@ -130,18 +143,18 @@ static int registry_grow(void) {
 
 void coro_runtime_register(coro_runtime* r) {
     if (!r) return;
-    pthread_mutex_lock(&g_reg_lock);
+    coro_plat_mutex_lock(&g_reg_lock);
     if (registry_grow() == 0) {
         g_reg[g_reg_count].id = r->id;
         g_reg[g_reg_count].rt = r;
         ++g_reg_count;
     }
-    pthread_mutex_unlock(&g_reg_lock);
+    coro_plat_mutex_unlock(&g_reg_lock);
 }
 
 void coro_runtime_unregister(coro_runtime* r) {
     if (!r) return;
-    pthread_mutex_lock(&g_reg_lock);
+    coro_plat_mutex_lock(&g_reg_lock);
     for (size_t i = 0; i < g_reg_count; ++i) {
         if (g_reg[i].rt == r) {
             g_reg[i] = g_reg[g_reg_count - 1];
@@ -149,7 +162,7 @@ void coro_runtime_unregister(coro_runtime* r) {
             break;
         }
     }
-    pthread_mutex_unlock(&g_reg_lock);
+    coro_plat_mutex_unlock(&g_reg_lock);
 }
 
 void coro_runtime_wait_work(coro_runtime* r) {
@@ -158,9 +171,9 @@ void coro_runtime_wait_work(coro_runtime* r) {
        the queue being non-empty, and one raised after the check still sets the
        signal, so the block cannot miss a request. */
     coro_wait_reset(&r->work);
-    pthread_mutex_lock(&r->lock);
+    coro_plat_mutex_lock(&r->lock);
     int empty = (q_load(&r->head) == NULL);
-    pthread_mutex_unlock(&r->lock);
+    coro_plat_mutex_unlock(&r->lock);
     if (empty) coro_wait_block(&r->work);
 }
 
@@ -174,22 +187,22 @@ void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline) {
        the queue being non-empty, and one raised after the check still sets the
        signal, so the wait cannot miss a request. */
     coro_wait_reset(&r->work);
-    pthread_mutex_lock(&r->lock);
+    coro_plat_mutex_lock(&r->lock);
     int empty = (q_load(&r->head) == NULL);
-    pthread_mutex_unlock(&r->lock);
+    coro_plat_mutex_unlock(&r->lock);
     if (empty) coro_wait_block_until(&r->work, deadline);
 }
 
 coro_runtime* coro_runtime_by_id(uint64_t id) {
     coro_runtime* found = NULL;
-    pthread_mutex_lock(&g_reg_lock);
+    coro_plat_mutex_lock(&g_reg_lock);
     for (size_t i = 0; i < g_reg_count; ++i) {
         if (g_reg[i].id == id) {
             found = g_reg[i].rt;
             break;
         }
     }
-    pthread_mutex_unlock(&g_reg_lock);
+    coro_plat_mutex_unlock(&g_reg_lock);
     return found;
 }
 
@@ -197,14 +210,14 @@ size_t coro_runtime_pending(const coro_runtime* r) {
     if (!r) return 0;
     /* The queue is only mutated under its lock; a snapshot is enough for a
        diagnostic count. */
-    pthread_mutex_t* lock = (pthread_mutex_t*)&r->lock;
-    pthread_mutex_lock(lock);
+    coro_plat_mutex_t* lock = (coro_plat_mutex_t*)&r->lock;
+    coro_plat_mutex_lock(lock);
     size_t n = 0;
     for (coro_delivery* d = (coro_delivery*)q_load(&r->head); d;
          d = q_load(&d->next)) {
         ++n;
     }
-    pthread_mutex_unlock(lock);
+    coro_plat_mutex_unlock(lock);
     return n;
 }
 
@@ -229,7 +242,9 @@ void coro_runtime_thread_exit(void* arg) {
         coro_runtime_unregister(r);
         coro_runtime_drain(r);
         coro_wait_destroy(&r->work);
+#if !defined(_WIN32)
         pthread_mutex_destroy(&r->lock);
+#endif
         free(r);
     }
 }

@@ -25,13 +25,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
-
 #include "arch/coro_atomic.h"
 
+/* The node type belongs to the runtime layer (scheduler/rt.h defines it);
+   this header only needs the name. The guard keeps the forward declaration
+   single-source among its users (rt.h, mpsc.h and this header), which is
+   also what strict C11-only toolchains (NDK clang -Wtypedef-redefinition)
+   require. */
+#ifndef COROCC_FWD_RT_NODE
+#define COROCC_FWD_RT_NODE
 typedef struct rt_node rt_node;
+#endif
 
 /* Capacity must be a power of two so the mask drops to &; 4096 keeps the
    hot-path deque tiny in cache while making overflow essentially unreachable. */

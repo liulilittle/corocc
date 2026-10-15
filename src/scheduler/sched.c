@@ -164,11 +164,34 @@ coro_status sched_join(coro_sched_t* s, sched_node* target) {
 
     if (target->done) return CORO_EDESTROYED;
 
-    /* Link at the head; the retire path unlinks the whole chain. */
+    /* Link at the head; the retire path unlinks the whole chain. The chain
+       is only ever mutated by this thread's run loop, so the link is atomic
+       with respect to any concurrent retire. */
     self->waiter_next = target->waiter_next;
     target->waiter_next = self;
     self->waiting = 1; /* a join is a wait, so no round-robin requeue */
-    return coro_yield();
+    coro_status st = coro_yield();
+    if (st != CORO_OK) {
+        /* Cancelled before or at the park: the yield consumed the request
+           without switching out, so this node is still linked on the
+           target's chain. Unlink it -- a later retire would walk this node
+           after it was freed -- and clear the wait flag so a following
+           plain yield requeues normally. A retire that ran in the same
+           instant has already unlinked the whole chain; detaching what is
+           not there is a no-op. */
+        sched_node** p = &target->waiter_next;
+        while (*p) {
+            if (*p == self) {
+                *p = self->waiter_next;
+                self->waiter_next = NULL;
+                break;
+            }
+            p = &(*p)->waiter_next;
+        }
+        self->waiting = 0;
+        return st;
+    }
+    return CORO_OK;
 }
 
 coro_status coro_sched_join(coro_sched_t* s, coro_t* c) {
