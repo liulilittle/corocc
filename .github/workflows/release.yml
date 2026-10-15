@@ -40,7 +40,9 @@ jobs:
           - { abi: aarch64_be, triple: aarch64_be-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }
           - { abi: armeb,      triple: armeb-unknown-linux-gnueabi, toolchain: scripts/toolchains/armeb.cmake, apt: "gcc-arm-linux-gnueabi g++-arm-linux-gnueabi", assets: "armeb-linux-gnueabi" }
           - { abi: riscv32,    triple: riscv32-unknown-linux-gnu, toolchain: scripts/toolchains/riscv32.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "riscv32-linux-gnu" }
-          # - { abi: mips_n32,   triple: mipsisa32r6el-unknown-linux-gnu, toolchain: scripts/toolchains/mipsn32.cmake, apt: "gcc-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32atomic1-mips64-cross" }   # enable after W6
+          # --- mips N32 (apt multilib route; N32 sysroot + versioned gcc-13 drivers) ---
+          - { abi: mipsn32,   triple: mips64-unknown-linux-gnuabin32,   toolchain: scripts/toolchains/mipsn32.cmake,   apt: "gcc-13-mips64-linux-gnuabi64 g++-13-mips64-linux-gnuabi64 gcc-13-multilib-mips64-linux-gnuabi64 g++-13-multilib-mips64-linux-gnuabi64 libc6-dev-mipsn32-mips64-cross libn32stdc++-13-dev-mips64-cross", assets: "" }
+          - { abi: mipsn32el, triple: mips64el-unknown-linux-gnuabin32, toolchain: scripts/toolchains/mipsn32el.cmake, apt: "gcc-13-mips64el-linux-gnuabi64 g++-13-mips64el-linux-gnuabi64 gcc-13-multilib-mips64el-linux-gnuabi64 g++-13-multilib-mips64el-linux-gnuabi64 libc6-dev-mipsn32-mips64el-cross libn32stdc++-13-dev-mips64el-cross", assets: "" }
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ inputs.tag || github.ref }}" }

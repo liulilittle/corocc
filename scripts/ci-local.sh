@@ -81,6 +81,8 @@ if [ "${SKIP_CROSS:-0}" != "1" ]; then
         "mipsel_o32|scripts/toolchains/mips32el.cmake|mipsel-linux-gnu-gcc"
         "mips64_n64|scripts/toolchains/mips64.cmake|mips64-linux-gnuabi64-gcc-13"
         "mips64el_n64|scripts/toolchains/mips64el.cmake|mips64el-linux-gnuabi64-gcc-13"
+        "mipsn32|scripts/toolchains/mipsn32.cmake|mips64-linux-gnuabi64-gcc-13"
+        "mipsn32el|scripts/toolchains/mipsn32el.cmake|mips64el-linux-gnuabi64-gcc-13"
         "ppc32|scripts/toolchains/ppc32.cmake|powerpc-linux-gnu-gcc"
         "ppc64|scripts/toolchains/ppc64.cmake|powerpc64-linux-gnu-gcc"
         "ppc64le|scripts/toolchains/ppc64le.cmake|powerpc64le-linux-gnu-gcc"
