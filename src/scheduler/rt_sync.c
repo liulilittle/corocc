@@ -43,14 +43,29 @@ static void node_clear(rt_node* n, unsigned bit) {
     (void)coro_at_and((volatile uint64_t*)&n->flags, ~(uint64_t)bit);
 }
 
+/* Head-pointer accesses go through the atomic helpers. The mutex unlock and
+   the semaphore post fast paths read the head outside the activity lock
+   (ordered against an enqueue by the same-word barrier handshake, see the
+   lock path); a mixed plain/atomic access to the same object would be a
+   data race under the C model even though the logical mutation of the chain
+   stays protected by act_lock. The link fields are only ever touched while
+   act_lock is held and stay plain. */
+static rt_node* head_load(void** q) {
+    return (rt_node*)coro_atp_load((const volatile uintptr_t*)q);
+}
+static void head_store(void** q, rt_node* n) {
+    coro_atp_store((volatile uintptr_t*)q, (uintptr_t)n);
+}
+
 /* Append n to the FIFO chain q (assumes the activity lock is held). */
 static void q_append(void** q, rt_node* n) {
     n->waiter_next = NULL;
-    if (!*q) {
-        *q = (void*)n;
+    rt_node* head = head_load(q);
+    if (!head) {
+        head_store(q, n);
         return;
     }
-    rt_node* t = (rt_node*)*q;
+    rt_node* t = head;
     while (t->waiter_next) t = t->waiter_next;
     t->waiter_next = n;
 }
@@ -60,9 +75,9 @@ static void q_append(void** q, rt_node* n) {
    traverses waiter_next; a leftover link would let a sync chain bleed into a
    join chain and wake a phantom). */
 static rt_node* q_pop(void** q) {
-    rt_node* n = (rt_node*)*q;
+    rt_node* n = head_load(q);
     if (n) {
-        *q = (void*)n->waiter_next;
+        head_store(q, n->waiter_next);
         n->waiter_next = NULL;
     }
     return n;
@@ -92,15 +107,21 @@ static void rt_chain_park(void** chain, rt_node* self) {
    releaser already woke (not found here) the clear is a no-op -- that
    path's driver settle already retired the marker. */
 static void rt_detach(void** chain, rt_node* self) {
-    rt_node** p = (rt_node**)chain;
-    while (*p) {
-        if (*p == self) {
-            *p = self->waiter_next;
+    rt_node* head = head_load(chain);
+    if (head == self) {
+        head_store(chain, self->waiter_next);
+        self->waiter_next = NULL;
+        node_clear(self, RT_WAITING);
+        node_clear(self, RT_PARKED);
+        return;
+    }
+    for (rt_node* t = head; t; t = t->waiter_next) {
+        if (t->waiter_next == self) {
+            t->waiter_next = self->waiter_next;
             self->waiter_next = NULL;
             node_clear(self, RT_WAITING);
             break;
         }
-        p = &(*p)->waiter_next;
     }
     node_clear(self, RT_PARKED);
 }
@@ -129,19 +150,33 @@ coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m) {
         uint64_t cur = 0;
         if (coro_at_cas(&m->locked, &cur, 1)) return CORO_OK;
 
-        /* Slow path. unlock() clears `locked` and drains the wait chain while
-           holding the activity lock; if our failed CAS and our append were not
-           serialized against it, the unlock could run in between and strand us
-           on the chain with a free lock, never woken. Re-check and append under
-           that same lock: either we observe the free lock here and take it, or
-           we are queued before the pop and are guaranteed a wake. */
+        /* Slow path: enqueue FIRST, then retry the take inside the same
+           activity-lock section. The unlock fast path (release exchange,
+           acquire read of the chain head) and this section form a
+           release/acquire handshake over the lock word itself: both sides
+           run an RMW on `locked` (the waiter a zero-delta barrier RMW, the
+           unlocker the release exchange), so the two are totally ordered
+           by the word's coherence and no plain store can break the chain.
+           If the waiter's RMW is ordered first,
+           its earlier enqueue is published to the unlocker's head read and
+           the pop finds this node; if the unlocker's RMW is ordered first,
+           its release is visible to the retry below, which then wins
+           without parking. The waiting bits are set only on the parking
+           branch, so a node that won the retry is never seen as a waiter by
+           a pop that already claimed the link (such a pop wakes only parked
+           nodes). */
         coro_plat_mutex_lock(&rt->act_lock);
+        q_append(&m->waitq, self);
+        coro_at_fence_rmw(&m->locked);
         cur = 0;
         if (coro_at_cas(&m->locked, &cur, 1)) {
+            /* Won while queued: unlink and return; never parked. */
+            rt_detach(&m->waitq, self);
             coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
-        rt_chain_park(&m->waitq, self);
+        node_set(self, RT_WAITING);
+        node_set(self, RT_PARKED);
         coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
@@ -166,9 +201,30 @@ coro_status coro_rt_mutex_unlock(coro_rt_t* rt, coro_rt_mutex_t* m) {
     if (!rt || !m) return CORO_EINVAL;
     if (coro_at_load(&m->locked) == 0) return CORO_ESTATE;
 
+    /* Release, then decide: with no queued waiter the activity lock is
+       skipped entirely. The release is an EXCHANGE, not a store: the lock
+       word must never be written by a plain store, or an intervening plain
+       store could sit between the waiting side's barrier RMW and this one
+       in the word's modification order and terminate the release sequence
+       that carries the enqueue (C++20 [atomics.order]/1: a plain store by
+       another thread ends the sequence). With every write to the word an
+       RMW (CAS/barrier/exchange), the two sides' RMWs are adjacent-in-chain
+       whatever the order: the later one reads the earlier one's write, a
+       same-location release/acquire chain every supported target gives.
+       So either this exchange reads the waiter's barrier RMW (its enqueue
+       is published to the head read below and the slow path pops it), or
+       the waiter's barrier RMW reads this exchange (its retry sees the
+       release and wins without parking). A stale non-empty hit only costs
+       the slow path: the pop re-reads the head under the activity lock,
+       and it wakes only a node whose waiting bit is set (a lock winner's
+       node never has it). */
+    (void)coro_at_exchange(&m->locked, 0);
+    if (coro_atp_load((const volatile uintptr_t*)&m->waitq) == 0) {
+        return CORO_OK;
+    }
+
     coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = q_pop(&m->waitq);
-    coro_at_store(&m->locked, 0);
     coro_plat_mutex_unlock(&rt->act_lock);
 
     if (w) rt_node_wake(rt, w);
@@ -193,7 +249,13 @@ coro_status coro_rt_cond_wait(coro_rt_t* rt, coro_rt_cond_t* c,
        release and the cond-append both happen under the activity lock. */
     coro_plat_mutex_lock(&rt->act_lock);
     rt_node* mw = q_pop(&m->waitq);
-    coro_at_store(&m->locked, 0);
+    /* Exchange, not a plain store: after init the lock word must only ever
+       be written by an RMW. A plain store here would sit between a queued
+       waiter's barrier RMW and a later unlock's exchange in the word's
+       modification order and terminate the release sequence that carries
+       that waiter's enqueue to the unlock's fast-path head read (see the
+       closure proof at coro_rt_mutex_unlock). */
+    (void)coro_at_exchange(&m->locked, 0);
     rt_chain_park(&c->waitq, self);
     coro_plat_mutex_unlock(&rt->act_lock);
     if (mw) rt_node_wake(rt, mw);
@@ -259,17 +321,22 @@ coro_status coro_rt_sem_wait(coro_rt_t* rt, coro_rt_sem_t* s) {
     for (;;) {
         if (coro_rt_sem_trywait(rt, s) == CORO_OK) return CORO_OK;
 
-        /* Same check-and-suspend atomicity as the mutex: post() bumps the
-           count and pops the chain under the activity lock, so re-check the
-           token and append the waiter under that same lock. A post landing
-           between the failed trywait and our append is then either consumed
-           here or observed by the pop as a queued waiter -- never lost. */
+        /* Same append-first handshake as the mutex lock, over the count
+           word: post() bumps the count and runs its barrier on the same
+           word, so either this enqueue is visible to the post's head read
+           (and the post pops this node) or this retry -- ordered after
+           this side's barrier -- consumes the posted token without
+           parking. */
         coro_plat_mutex_lock(&rt->act_lock);
+        q_append(&s->waitq, self);
+        coro_at_fence_rmw(&s->count);
         if (coro_rt_sem_trywait(rt, s) == CORO_OK) {
+            rt_detach(&s->waitq, self);
             coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
-        rt_chain_park(&s->waitq, self);
+        node_set(self, RT_WAITING);
+        node_set(self, RT_PARKED);
         coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
@@ -291,6 +358,16 @@ coro_status coro_rt_sem_post(coro_rt_t* rt, coro_rt_sem_t* s) {
        to a concurrent waiter decrement and drop the token. A fetch-add is
        atomic and cannot lose. */
     (void)coro_at_fetch_add((volatile uint64_t*)&s->count, 1);
+
+    /* Fast path: with no queued waiter the activity lock is skipped. The
+       barrier is a zero-delta RMW on the count word, pairing with the wait
+       path's RMW on the same word: a retry that does not observe this add
+       is exactly the case where the head read below observes the enqueue
+       (see the wait path). */
+    coro_at_fence_rmw(&s->count);
+    if (coro_atp_load((const volatile uintptr_t*)&s->waitq) == 0) {
+        return CORO_OK;
+    }
 
     coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = q_pop(&s->waitq);

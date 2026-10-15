@@ -93,6 +93,24 @@ static inline void coro_at_fence(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
 
+/* Barrier RMW: a zero-delta fetch-add on a 64-bit word the caller's
+   protocol already owns (the lock word or the semaphore count). It is an
+   acquire/release RMW on that single location -- on x86 the locked
+   instruction is also a full barrier, but on the ARM family (ldaddal, or
+   the ldrex/strex pair; no separate dmb), on riscv64 (amoadd.d.aqrl), on
+   s390x (laag) and on the other supported targets it is exactly the
+   acquire/release semantics of that RMW, NOT a global full barrier. The
+   sync fast paths rely only on the same-location release/acquire chain
+   such an RMW pair establishes (the enqueue or the release is published
+   before this RMW; a later RMW on the same word reads that write and
+   carries the edge onward), never on a full barrier. Chosen over
+   __atomic_thread_fence because GCC's TSan instrumentation rejects the
+   fence builtin under -Wtsan, and a modeled RMW keeps the TSan site
+   warning-free. */
+static inline void coro_at_fence_rmw(volatile uint64_t* p) {
+    (void)__atomic_fetch_add(p, (uint64_t)0, __ATOMIC_SEQ_CST);
+}
+
 /* Retry loop for lock-free queues: returns the value the location held after
    the winning attempt. Bounded by the caller; only the queue layer may loop. */
 static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
@@ -226,10 +244,19 @@ static inline void coro_at_fence(void) {
     /* A full fence without <windows.h>: the compiler barrier orders the
        source, __faststorefence orders the hardware. On x64 that pair is
        exactly what winnt.h's MemoryBarrier expands to, which keeps this
-       internal header free of the Windows SDK (avoiding the "MemoryBarrier
-       undeclared" build failure). x64 MSVC is the supported scope. */
+       internal header free of the Windows SDK (the M9 W2a fix for the
+       "MemoryBarrier undeclared" build failure). x64 MSVC is the M9 scope.
+       Verified codegen (fence_probe): lock or dword ptr [rsp],0 -- a full
+       barrier, StoreLoad included. */
     _ReadWriteBarrier();
     __faststorefence();
+}
+
+/* Sequentially consistent barrier spelled as a zero-delta fetch-add on a
+   64-bit word the caller's protocol already owns (see the GCC note above).
+   The interlocked add is a full barrier, so the same spelling serves. */
+static inline void coro_at_fence_rmw(volatile uint64_t* p) {
+    (void)_InterlockedExchangeAdd64((volatile long long*)p, 0);
 }
 
 static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
