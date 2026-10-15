@@ -35,9 +35,7 @@
 #include <corocc/coro_rt.h>
 #include <corocc/coro.h>
 
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
+#include "platform/coro_plat_locks.h"
 
 #include "coroutine/coro_runtime.h"
 #include "scheduler/wsdeque.h"
@@ -45,7 +43,15 @@
 #include "scheduler/timer.h"
 #include "platform/threads.h"
 
+/* The node type is forward-declared by scheduler/wsdeque.h and
+   scheduler/mpsc.h (included above) under the same guard, so this declaration
+   is skipped whenever either of them came first -- which they always do here.
+   One guarded declaration keeps the name defined exactly once for strict
+   C11-only toolchains (NDK clang -Wtypedef-redefinition, M9 W2a). */
+#ifndef COROCC_FWD_RT_NODE
+#define COROCC_FWD_RT_NODE
 typedef struct rt_node rt_node;
+#endif
 typedef struct rt_worker rt_worker;
 
 /* Node state bits, kept in one atomic word so cross-thread readers (cancel)
@@ -93,17 +99,21 @@ struct rt_worker {
  */
 void rt_node_wake(coro_rt_t* rt, rt_node* n);
 
-typedef struct coro_rt {
+/* The type name coro_rt_t lives in the public header <corocc/coro_rt.h>
+   (typedef struct coro_rt coro_rt_t, line 40), included above; repeating the
+   typedef here would be a typedef redefinition under strict C11-only
+   toolchains, so the internal structure only completes the public tag. */
+struct coro_rt {
     rt_worker*      workers;
     size_t          nworkers;
-    pthread_mutex_t act_lock;     /**< guards act_gen and the idle/settled waits. */
+    coro_plat_mutex_t act_lock;   /**< guards act_gen and the idle/settled waits. */
     uint64_t        act_gen;      /**< bumped whenever a node becomes runnable. */
-    pthread_cond_t  act_cond;     /**< idle workers sleep here (monotone). */
-    pthread_cond_t  settled;      /**< raises when live == 0 (wait_all). */
+    coro_plat_cond_t act_cond;    /**< idle workers sleep here (monotone). */
+    coro_plat_cond_t settled;     /**< raises when live == 0 (wait_all). */
     uint64_t        live;         /**< coroutines not yet finished (retired); a
                                        finished retained handle no longer
                                        counts (atomic). */
     size_t          spawn_seq;    /**< round-robin spawn distribution. */
-} coro_rt_t;
+};
 
 #endif /* COROCC_SCHEDULER_RT_H */

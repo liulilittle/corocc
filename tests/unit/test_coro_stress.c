@@ -33,7 +33,13 @@ static void entry_fuzz(void* arg) {
     }
 }
 
+#if defined(_WIN32)
+/* MSVC's unsigned long is 32-bit and the 64-bit constant does not fit
+   (C4305 under /W4 /WX); the low 32 bits keep the same xorshift mixing. */
+static unsigned long g_state = 0x9e3779b9ul;
+#else
 static unsigned long g_state = 0x9e3779b97f4a7c15ul;
+#endif
 
 static unsigned long rnd(void) {
     g_state ^= g_state << 13;

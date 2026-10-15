@@ -151,6 +151,13 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
     if (a.allocator) {
         c = (coro_t*)a.allocator->alloc_handle(sizeof *c);
         if (!c) return CORO_ENOMEM;
+        /* The handle comes from the caller's allocator, which is not required
+           to zero its memory. Everything the create path does not assign
+           explicitly -- `cancel_req` (a nonzero leftover reads as "cancel
+           requested", so the first yield would report CORO_ECANCELED),
+           `sched_tag` and the local slots -- must start zeroed; the built-in
+           path calloc's for the same reason. */
+        memset(c, 0, sizeof *c);
         void* mem = NULL;
         if (a.allocator->alloc_stack(&mem, stk_size) != CORO_OK) {
             a.allocator->free_handle(c);

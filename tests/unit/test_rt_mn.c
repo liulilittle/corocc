@@ -15,13 +15,6 @@
  *   - coro_rt_wait_all drains every spawn; coro_rt_pending drops to zero.
  */
 
-#if defined(_WIN32)
-static void run_tests(void) {
-    CHECK(0 && "M:N runtime suites: POSIX threads only in this build");
-}
-TEST_MAIN()
-#else
-
 #define COROS 500u
 #define ITERS 20u
 
@@ -95,4 +88,3 @@ static void run_tests(void) {
 }
 
 TEST_MAIN()
-#endif

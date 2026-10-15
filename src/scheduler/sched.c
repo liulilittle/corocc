@@ -115,14 +115,14 @@ void sched_collect_expired(coro_sched_t* s) {
     for (;;) {
         coro_timer_node* t;
         sched_node* n;
-        pthread_mutex_lock(&s->timer_lock);
+        coro_plat_mutex_lock(&s->timer_lock);
         t = coro_timer_heap_top(&s->sleepers);
         if (!t || t->deadline > now) {
-            pthread_mutex_unlock(&s->timer_lock);
+            coro_plat_mutex_unlock(&s->timer_lock);
             return;
         }
         t = coro_timer_heap_pop(&s->sleepers);
-        pthread_mutex_unlock(&s->timer_lock);
+        coro_plat_mutex_unlock(&s->timer_lock);
         /* the timer node is embedded in the bookkeeping node, so the address
            of the owning node is the timer's address minus that offset */
         n = (sched_node*)(void*)((char*)t - offsetof(sched_node, timer));
@@ -136,9 +136,9 @@ static void retire_node(coro_sched_t* s, sched_node* n) {
     /* A finishing coroutine may still hold a deadline if it was cancelled
        between the timer firing and its next drive; leaving it in the heap
        would later hand the loop a pointer to this freed node. */
-    pthread_mutex_lock(&s->timer_lock);
+    coro_plat_mutex_lock(&s->timer_lock);
     (void)coro_timer_heap_remove(&s->sleepers, &n->timer);
-    pthread_mutex_unlock(&s->timer_lock);
+    coro_plat_mutex_unlock(&s->timer_lock);
     /* Unlink the whole chain first: each waiter is resumed exactly once, no
        matter how many of them were waiting. */
     n->waiter_next = NULL;
@@ -218,16 +218,16 @@ coro_status sched_sleep(coro_sched_t* s, uint64_t deadline) {
        queue until its deadline fires, so the loop must not requeue it the way
        it requeues a plain yield. */
     n->waiting = 1;
-    pthread_mutex_lock(&s->timer_lock);
+    coro_plat_mutex_lock(&s->timer_lock);
     coro_timer_heap_push(&s->sleepers, &n->timer);
-    pthread_mutex_unlock(&s->timer_lock);
+    coro_plat_mutex_unlock(&s->timer_lock);
     return coro_yield();
 }
 
 void sched_wake(coro_sched_t* s, sched_node* n) {
     int removed;
     if (!s || !n) return;
-    pthread_mutex_lock(&s->timer_lock);
+    coro_plat_mutex_lock(&s->timer_lock);
     /* Removal refuses a node that is not in the heap, which is exactly the
        state of a node whose deadline already fired. */
     removed = (coro_timer_heap_remove(&s->sleepers, &n->timer) == 0);
@@ -238,7 +238,7 @@ void sched_wake(coro_sched_t* s, sched_node* n) {
            scheduler's thread, not necessarily the caller's. */
         coro_runtime_signal_work(s->rt);
     }
-    pthread_mutex_unlock(&s->timer_lock);
+    coro_plat_mutex_unlock(&s->timer_lock);
 }
 
 coro_status coro_sched_cancel(coro_sched_t* s, coro_t* c) {
@@ -261,7 +261,10 @@ coro_status coro_sched_sleep(coro_sched_t* s, uint64_t deadline) {
 coro_sched_t* coro_sched_create(void) {
     coro_sched_t* s = (coro_sched_t*)calloc(1, sizeof *s);
     if (!s) return NULL;
+#if !defined(_WIN32)
+    /* SRWLOCK (Windows) is ready zero-initialized; POSIX needs the init. */
     pthread_mutex_init(&s->timer_lock, NULL);
+#endif
     coro_timer_heap_init(&s->sleepers);
     return s;
 }
@@ -311,9 +314,9 @@ coro_status coro_sched_run(coro_sched_t* s) {
            pending is idle by design, and a sleeping one has a deadline in the
            heap: sleep until the nearest deadline or a delivery, then sweep. */
         coro_timer_node* t;
-        pthread_mutex_lock(&s->timer_lock);
+        coro_plat_mutex_lock(&s->timer_lock);
         t = coro_timer_heap_top(&s->sleepers);
-        pthread_mutex_unlock(&s->timer_lock);
+        coro_plat_mutex_unlock(&s->timer_lock);
         if (t) {
             coro_runtime_wait_work_until(s->rt, t->deadline);
             continue;

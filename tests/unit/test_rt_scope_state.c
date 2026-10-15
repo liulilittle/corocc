@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep in the thread-side wait below */
+#endif
+
 /* L3 step 1: the scope state machine (verdict §3.8) and the per-API return
  * codes that guard it (verdict §3.9). Every illegal transition is pinned:
  *
@@ -41,10 +45,14 @@ static coro_status sleeper_entry(void* arg) {
 
 /* A short thread-side wait, as the L2 lifecycle suite uses it. */
 static void sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 static void run_tests(void) {

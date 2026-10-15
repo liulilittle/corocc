@@ -135,14 +135,14 @@ coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m) {
            on the chain with a free lock, never woken. Re-check and append under
            that same lock: either we observe the free lock here and take it, or
            we are queued before the pop and are guaranteed a wake. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         cur = 0;
         if (coro_at_cas(&m->locked, &cur, 1)) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
         rt_chain_park(&m->waitq, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled while parked. If we were still queued a later unlock
@@ -151,9 +151,9 @@ coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m) {
                or not we won. */
             uint64_t c2 = 0;
             int won = coro_at_cas(&m->locked, &c2, 1);
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             rt_detach(&m->waitq, self);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return won ? CORO_OK : CORO_ECANCELED;
         }
         /* Woken normally: loop and re-attempt the take (park again if
@@ -166,10 +166,10 @@ coro_status coro_rt_mutex_unlock(coro_rt_t* rt, coro_rt_mutex_t* m) {
     if (!rt || !m) return CORO_EINVAL;
     if (coro_at_load(&m->locked) == 0) return CORO_ESTATE;
 
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = q_pop(&m->waitq);
     coro_at_store(&m->locked, 0);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
 
     if (w) rt_node_wake(rt, w);
     return CORO_OK;
@@ -191,19 +191,19 @@ coro_status coro_rt_cond_wait(coro_rt_t* rt, coro_rt_cond_t* c,
 
     /* Release the mutex and park, atomically with respect to notifiers: the
        release and the cond-append both happen under the activity lock. */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rt_node* mw = q_pop(&m->waitq);
     coro_at_store(&m->locked, 0);
     rt_chain_park(&c->waitq, self);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (mw) rt_node_wake(rt, mw);
 
     if (coro_yield() != CORO_OK) {
         /* Cancelled while on the cond chain. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         rt_detach(&c->waitq, self);
         node_clear(self, RT_WAITING);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         /* Re-acquire the mutex so the caller may clean up consistently. */
         return coro_rt_mutex_lock(rt, m);
     }
@@ -214,9 +214,9 @@ coro_status coro_rt_cond_wait(coro_rt_t* rt, coro_rt_cond_t* c,
 
 coro_status coro_rt_cond_notify(coro_rt_t* rt, coro_rt_cond_t* c) {
     if (!rt || !c) return CORO_EINVAL;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = q_pop(&c->waitq);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (w) {
         rt_node_wake(rt, w);
     }
@@ -226,9 +226,9 @@ coro_status coro_rt_cond_notify(coro_rt_t* rt, coro_rt_cond_t* c) {
 coro_status coro_rt_cond_broadcast(coro_rt_t* rt, coro_rt_cond_t* c) {
     if (!rt || !c) return CORO_EINVAL;
     for (;;) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         rt_node* w = q_pop(&c->waitq);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         if (!w) return CORO_OK;
         rt_node_wake(rt, w);
     }
@@ -264,21 +264,21 @@ coro_status coro_rt_sem_wait(coro_rt_t* rt, coro_rt_sem_t* s) {
            token and append the waiter under that same lock. A post landing
            between the failed trywait and our append is then either consumed
            here or observed by the pop as a queued waiter -- never lost. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (coro_rt_sem_trywait(rt, s) == CORO_OK) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
         rt_chain_park(&s->waitq, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled while parked: detach; a racing post already bumped
                the count and will not be double-counted. */
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             rt_detach(&s->waitq, self);
             node_clear(self, RT_WAITING);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ECANCELED;
         }
         node_clear(self, RT_WAITING);
@@ -292,9 +292,9 @@ coro_status coro_rt_sem_post(coro_rt_t* rt, coro_rt_sem_t* s) {
        atomic and cannot lose. */
     (void)coro_at_fetch_add((volatile uint64_t*)&s->count, 1);
 
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = q_pop(&s->waitq);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (w) {
         rt_node_wake(rt, w);
     }
@@ -429,28 +429,28 @@ coro_status coro_rt_rwlock_rdlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
         /* Slow path: park under the activity lock so the release path (which
            drains the reader chain under the same lock) cannot run between the
            failed attempt and the append. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         coro_status again = rw_try_read(l);
         if (again == CORO_ESTATE) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ESTATE;
         }
         if (again == CORO_OK) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
         rt_chain_park(&l->rd_waitq, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled while parked: finish the operation if it is now
                possible (the wake may have already freed the lock), else
                detach and report the cancellation. */
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             coro_status retry = rw_try_read(l);
             rt_detach(&l->rd_waitq, self);
             node_clear(self, RT_WAITING);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return retry == CORO_OK ? CORO_OK : CORO_ECANCELED;
         }
         node_clear(self, RT_WAITING);
@@ -472,7 +472,7 @@ coro_status coro_rt_rwlock_rdunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
            and release every parked reader. The drain is not optional: a
            cancelled writer clears WW, and a reader that parked behind it must
            still be woken, or it hangs forever. */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     int last = (coro_at_load(&l->state) >> RW_READER_SHIFT) == 0;
     rt_node* w = last ? rw_pop_writer(l) : NULL;
     if (last && !w) {
@@ -484,12 +484,12 @@ coro_status coro_rt_rwlock_rdunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
         for (;;) {
             rt_node* r = (rt_node*)q_pop(&l->rd_waitq);
             if (!r) break;
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             rt_node_wake(rt, r);
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
         }
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (w) rt_node_wake(rt, w);
     return CORO_OK;
 }
@@ -505,31 +505,31 @@ coro_status coro_rt_rwlock_wrlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
 
         /* Slow path: queue behind any waiting writer (writer preference) and
            latch WW under the activity lock so new readers are locked out. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (rw_try_write(l) == CORO_OK) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
         rt_chain_park(&l->wr_waitq, self);
         rw_recompute_ww(l);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled while queued: take the grant if it was handed to us
                (the CAS RW_WW -> RW_W completes in one step), else detach and
                keep the WW invariant by recomputing it. */
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             coro_status retry = rw_try_write(l);
             if (retry == CORO_OK) {
                 rt_detach(&l->wr_waitq, self);
                 node_clear(self, RT_WAITING);
-                pthread_mutex_unlock(&rt->act_lock);
+                coro_plat_mutex_unlock(&rt->act_lock);
                 return CORO_OK;
             }
             rt_detach(&l->wr_waitq, self);
             node_clear(self, RT_WAITING);
             rw_recompute_ww(l);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ECANCELED;
         }
         node_clear(self, RT_WAITING);
@@ -544,7 +544,7 @@ coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
 
     /* Hand the permission to the longest-waiting writer if one is queued;
        otherwise release every parked reader (bounded by the reader count). */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rt_node* w = rw_pop_writer(l);
     if (!w) {
         /* No writer waiting: clear WW and let readers in. */
@@ -556,12 +556,12 @@ coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
         for (;;) {
             rt_node* r = (rt_node*)q_pop(&l->rd_waitq);
             if (!r) break;
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             rt_node_wake(rt, r);
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
         }
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (w) rt_node_wake(rt, w);
     return CORO_OK;
 }
@@ -673,14 +673,14 @@ coro_status coro_rt_channel_destroy(coro_rt_channel_t* ch) {
 
 coro_status coro_rt_channel_close(coro_rt_t* rt, coro_rt_channel_t* ch) {
     if (!rt || !ch) return CORO_EINVAL;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     coro_at_store(&ch->closed, 1);
     /* Collect both chains under the lock so the wakers run outside it. */
     rt_node* senders = (rt_node*)ch->sendq;
     rt_node* receivers = (rt_node*)ch->recvq;
     ch->sendq = NULL;
     ch->recvq = NULL;
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     ch_wake_all(rt, senders);
     ch_wake_all(rt, receivers);
     return CORO_OK;   /* idempotent */
@@ -699,23 +699,23 @@ coro_status coro_rt_channel_trysend(coro_rt_t* rt, coro_rt_channel_t* ch,
     if (!rt || !ch) return CORO_EINVAL;
     if (coro_at_load(&ch->closed)) return CORO_ECLOSED;
 
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     if (coro_at_load(&ch->closed)) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_ECLOSED;
     }
     if (!ch_has_room(ch)) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_EBUSY;
     }
     if (ch_is_unbounded(ch) && ch->len == ch->cap && ch_grow(ch, ch->len + 1) != 0) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_ENOMEM;
     }
     ch->slots[(ch->head + ch->len) % ch->cap] = v;
     ++ch->len;
     rt_node* r = (rt_node*)q_pop(&ch->recvq);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (r) rt_node_wake(rt, r);
     return CORO_OK;
 }
@@ -732,15 +732,15 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
         if (fast == CORO_ECLOSED) return CORO_ECLOSED;
 
         /* Full: park under the activity lock and re-check atomically. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (coro_at_load(&ch->closed)) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ECLOSED;
         }
         int roomed = 0;
         if (ch_has_room(ch)) {
             if (ch_is_unbounded(ch) && ch->len == ch->cap && ch_grow(ch, ch->len + 1) != 0) {
-                pthread_mutex_unlock(&rt->act_lock);
+                coro_plat_mutex_unlock(&rt->act_lock);
                 return CORO_ENOMEM;
             }
             roomed = 1;
@@ -749,19 +749,19 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
             ch->slots[(ch->head + ch->len) % ch->cap] = v;
             ++ch->len;
             rt_node* r = (rt_node*)q_pop(&ch->recvq);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             if (r) rt_node_wake(rt, r);
             return CORO_OK;
         }
         rt_chain_park(&ch->sendq, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled while parked. The wake that released us may have
                freed a slot for us, so retry the send first (the same rule
                the mutex uses): if it completes, the grant is not lost.
                Detach either way so no phantom waiter remains. */
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             rt_detach(&ch->sendq, self);
             node_clear(self, RT_WAITING);
             int room = !coro_at_load(&ch->closed) && ch_has_room(ch);
@@ -773,11 +773,11 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
                 ch->slots[(ch->head + ch->len) % ch->cap] = v;
                 ++ch->len;
                 rt_node* r = (rt_node*)q_pop(&ch->recvq);
-                pthread_mutex_unlock(&rt->act_lock);
+                coro_plat_mutex_unlock(&rt->act_lock);
                 if (r) rt_node_wake(rt, r);
                 return CORO_OK;
             }
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ECANCELED;
         }
         node_clear(self, RT_WAITING);
@@ -787,22 +787,22 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
 coro_status coro_rt_channel_tryrecv(coro_rt_t* rt, coro_rt_channel_t* ch,
                                     void** out) {
     if (!rt || !ch) return CORO_EINVAL;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     if (ch->len > 0) {
         void* v = ch->slots[ch->head];
         ch->head = (ch->head + 1) % ch->cap;
         --ch->len;
         rt_node* s = (rt_node*)q_pop(&ch->sendq);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         if (s) rt_node_wake(rt, s);    /* its slot is free again */
         if (out) *out = v;
         return CORO_OK;
     }
     if (coro_at_load(&ch->closed)) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_ECLOSED;
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     return CORO_EBUSY;
 }
 
@@ -817,30 +817,30 @@ coro_status coro_rt_channel_recv(coro_rt_t* rt, coro_rt_channel_t* ch,
         if (fast == CORO_OK || fast == CORO_ECLOSED) return fast;
 
         /* Empty and open: park under the activity lock and re-check. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (ch->len > 0) {
             void* v = ch->slots[ch->head];
             ch->head = (ch->head + 1) % ch->cap;
             --ch->len;
             rt_node* s = (rt_node*)q_pop(&ch->sendq);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             if (s) rt_node_wake(rt, s);
             if (out) *out = v;
             return CORO_OK;
         }
         if (coro_at_load(&ch->closed)) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_ECLOSED;
         }
         rt_chain_park(&ch->recvq, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
 
         if (coro_yield() != CORO_OK) {
             /* Cancelled: retry the receive first, then detach. */
-            pthread_mutex_lock(&rt->act_lock);
+            coro_plat_mutex_lock(&rt->act_lock);
             rt_detach(&ch->recvq, self);
             node_clear(self, RT_WAITING);
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             coro_status retry = coro_rt_channel_tryrecv(rt, ch, out);
             return retry == CORO_OK || retry == CORO_ECLOSED ? retry
                                                              : CORO_ECANCELED;

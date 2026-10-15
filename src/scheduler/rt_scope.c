@@ -168,7 +168,7 @@ static rt_node* scope_publish_locked(coro_rt_scope_t* s,
            raise), so they must see every child event -- errors for
            first_error, completions for first_done, drains for wait. */
         coro_rt_t* rt = scope_bound_rt(s);
-        if (rt) pthread_cond_broadcast(&rt->settled);
+        if (rt) coro_plat_cond_broadcast(&rt->settled);
     }
     rt_node* waiters = (rt_node*)s->waitq;
     s->waitq = NULL;
@@ -180,7 +180,7 @@ static void scope_child_exit(struct scope_child* rec, coro_status st) {
     coro_rt_t*       rt = rec->rt;
     coro_rt_scope_t* s  = rec->scope;
     rec->value = st;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rec->done = 1;
     rt_node* waiters = NULL;
     if (rec->ready) {
@@ -191,7 +191,7 @@ static void scope_child_exit(struct scope_child* rec, coro_status st) {
            section performs the publish, exactly once. */
         rec->exit_pending = 1;
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     scope_wake_list(rt, waiters);
 }
 
@@ -210,10 +210,14 @@ static coro_status scope_collect_one(coro_rt_t* rt, coro_t* c) {
         for (unsigned i = 0; i < 5000u; ++i) {
             coro_status st = coro_rt_collect(rt, c);
             if (st != CORO_EBUSY) return st;
+#if defined(_WIN32)
+            Sleep(1); /* 1 ms; the retire completes promptly */
+#else
             struct timespec ts;
             ts.tv_sec = 0;
             ts.tv_nsec = 1000000L;   /* 1ms; the retire completes promptly */
             nanosleep(&ts, NULL);
+#endif
         }
         return coro_rt_collect(rt, c);
     }
@@ -266,9 +270,9 @@ coro_status coro_rt_scope_destroy(coro_rt_scope_t* s) {
         }
         return CORO_OK;
     }
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     if (s->live > 0) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_EBUSY;
     }
     {
@@ -278,7 +282,7 @@ coro_status coro_rt_scope_destroy(coro_rt_scope_t* s) {
     free(s->children);
     memset(s, 0, sizeof *s);
     coro_at_store((volatile uint64_t*)&s->state, SCOPE_DESTROYED);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     return CORO_OK;
 }
 
@@ -306,16 +310,16 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
        cancel that lands between the front check above and this append is
        caught here, so no child is ever registered on a scope that is
        already canceling (D10). The refused path registers nothing. */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     st = scope_state_load(s);
     if (st != SCOPE_OPEN) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         free(rec);
         return st == SCOPE_DESTROYED ? CORO_ESTALE : CORO_ESTATE;
     }
     coro_rt_t* owner = scope_bound_rt(s);
     if (owner && owner != rt) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         free(rec);
         return CORO_EINVAL;
     }
@@ -324,7 +328,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
         size_t ncap = s->cap ? s->cap * 2 : 8;
         void** nc = (void**)realloc(s->children, ncap * sizeof(void*));
         if (!nc) {
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             free(rec);
             return CORO_ENOMEM;   /* nothing registered: no half state */
         }
@@ -333,7 +337,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
     }
     ((struct scope_child**)s->children)[s->nchildren++] = rec;
     ++s->live;
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
 
     coro_t* h = NULL;
     coro_status rc = coro_rt_spawn_h(rt, attr, scope_trampoline, rec, &h);
@@ -342,7 +346,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
            table emptied, release it. The child never existed, so nobody
            can be waiting on it. */
         struct scope_child** table = (struct scope_child**)s->children;
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         for (size_t i = 0; i < s->nchildren; ++i) {
             if (table[i] == rec) {
                 table[i] = table[--s->nchildren];
@@ -355,7 +359,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
             s->cap = 0;
         }
         --s->live;
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         free(rec);
         return rc;
     }
@@ -366,7 +370,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
        walk's snapshot, so either the walk cancels this child or this call
        does -- exactly once (cancel_issued keeps the walk away). */
     int self_cancel = 0;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     rec->coro = h;
     rec->ready = 1;
     if (rec->exit_pending) {
@@ -374,15 +378,15 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
            publish waited for this critical section. */
         rec->exit_pending = 0;
         rt_node* waiters = scope_publish_locked(s, rec);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         scope_wake_list(rt, waiters);
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
     }
     if (scope_state_load(s) != SCOPE_OPEN) {
         rec->cancel_issued = 1;
         self_cancel = 1;
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (self_cancel) (void)coro_rt_cancel(rt, h);   /* outside the lock */
 
     if (cell_out) *cell_out = &rec->value;
@@ -407,7 +411,7 @@ coro_status coro_rt_scope_cancel(coro_rt_t* rt, coro_rt_scope_t* s) {
         coro_t* batch[SCOPE_CANCEL_CHUNK];
         size_t n = 0;
         struct scope_child** table = (struct scope_child**)s->children;
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         for (size_t i = 0; i < s->nchildren && n < SCOPE_CANCEL_CHUNK; ++i) {
             struct scope_child* rec = table[i];
             if (rec && rec->coro && !rec->done && !rec->cancel_issued) {
@@ -415,7 +419,7 @@ coro_status coro_rt_scope_cancel(coro_rt_t* rt, coro_rt_scope_t* s) {
                 batch[n++] = rec->coro;
             }
         }
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         if (n == 0) break;
         for (size_t i = 0; i < n; ++i) (void)coro_rt_cancel(rt, batch[i]);
     }
@@ -452,7 +456,7 @@ static coro_status scope_drain_locked(coro_rt_t* rt, coro_rt_scope_t* s,
         s->waitq = NULL;
     }
     coro_status agg = scope_status_load(s);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     scope_wake_list(rt, waiters);
     if (won) scope_collect_children(rt, s);
     return agg;
@@ -464,11 +468,11 @@ static coro_status scope_drain_locked(coro_rt_t* rt, coro_rt_scope_t* s,
    so the caller's loop simply re-locks and re-checks its predicate. */
 static void scope_park_once(coro_rt_t* rt, coro_rt_scope_t* s, rt_node* self) {
     scope_chain_park(s, self);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     if (coro_yield() != CORO_OK) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         scope_chain_detach(s, self);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
     }
 }
 
@@ -493,14 +497,14 @@ static coro_status scope_wait_core(coro_rt_t* rt, coro_rt_scope_t* s) {
            settled condition -- the same act_lock + cond shape
            coro_rt_wait_all uses -- until the scope's live count reaches
            zero, then drain. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         while (s->live > 0) {
-            pthread_cond_wait(&rt->settled, &rt->act_lock);
+            coro_plat_cond_wait(&rt->settled, &rt->act_lock);
         }
         return scope_drain_locked(rt, s, NULL);
     }
     for (;;) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (s->live == 0) return scope_drain_locked(rt, s, NULL);
         scope_park_once(rt, s, self);   /* releases the lock */
     }
@@ -519,22 +523,22 @@ static coro_status scope_wait_first_error_core(coro_rt_t* rt,
     if (!self) {
         /* The thread-blocking entry: same predicate and cancel-on-error
            shape as the coroutine path, parked on the settled condition. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         for (;;) {
             if (s->live == 0) return scope_drain_locked(rt, s, NULL);
             coro_status agg = scope_status_load(s);
             if (agg != CORO_OK && !cancelled) {
                 cancelled = 1;
-                pthread_mutex_unlock(&rt->act_lock);
+                coro_plat_mutex_unlock(&rt->act_lock);
                 (void)coro_rt_scope_cancel(rt, s);
-                pthread_mutex_lock(&rt->act_lock);
+                coro_plat_mutex_lock(&rt->act_lock);
                 continue;
             }
-            pthread_cond_wait(&rt->settled, &rt->act_lock);
+            coro_plat_cond_wait(&rt->settled, &rt->act_lock);
         }
     }
     for (;;) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (s->live == 0) return scope_drain_locked(rt, s, NULL);
         coro_status agg = scope_status_load(s);
         if (agg != CORO_OK && !cancelled) {
@@ -543,7 +547,7 @@ static coro_status scope_wait_first_error_core(coro_rt_t* rt,
                harmless. Issued outside this critical section (it signals
                through it), then the loop waits out the drain. */
             cancelled = 1;
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             (void)coro_rt_scope_cancel(rt, s);
             continue;
         }
@@ -562,23 +566,23 @@ static coro_status scope_wait_first_done_core(coro_rt_t* rt,
     rt_node* self = scope_self_node();
     if (!self) {
         /* The thread-blocking entry: parked on the settled condition. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         for (;;) {
             if (s->first_done || s->live == 0) {
                 *first = s->first_done ? (coro_status)s->first_value
                                        : CORO_OK;
-                pthread_mutex_unlock(&rt->act_lock);
+                coro_plat_mutex_unlock(&rt->act_lock);
                 return CORO_OK;
             }
-            pthread_cond_wait(&rt->settled, &rt->act_lock);
+            coro_plat_cond_wait(&rt->settled, &rt->act_lock);
         }
     }
     for (;;) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (s->first_done || s->live == 0) {
             /* A completion happened, or none ever will (an empty scope). */
             *first = s->first_done ? (coro_status)s->first_value : CORO_OK;
-            pthread_mutex_unlock(&rt->act_lock);
+            coro_plat_mutex_unlock(&rt->act_lock);
             return CORO_OK;
         }
         scope_park_once(rt, s, self);
@@ -610,11 +614,11 @@ struct scope_watchdog {
 static void watchdog_entry(void* pv) {
     struct scope_watchdog* wd = (struct scope_watchdog*)pv;
     if (coro_rt_sleep(wd->rt, wd->deadline) != CORO_OK) return;
-    pthread_mutex_lock(&wd->rt->act_lock);
+    coro_plat_mutex_lock(&wd->rt->act_lock);
     uint64_t zero = 0;
     int won = coro_at_cas((volatile uint64_t*)&wd->scope->timer_fired,
                           &zero, 1);
-    pthread_mutex_unlock(&wd->rt->act_lock);
+    coro_plat_mutex_unlock(&wd->rt->act_lock);
     if (!won) return;                       /* another watchdog claimed */
     (void)coro_rt_scope_cancel(wd->rt, wd->scope);
 }
@@ -653,31 +657,31 @@ coro_status coro_rt_scope_wait_for(coro_rt_t* rt, coro_rt_scope_t* s,
            once (the same timer_fired CAS the watchdog uses) and cancels;
            the wait still ends on live==0 and the drain, read in the same
            critical section, decides between ECANCELED and the aggregate. */
-        struct timespec ts;
-        ts.tv_sec = (time_t)(deadline / 1000000000ull);
-        ts.tv_nsec = (long)(deadline % 1000000000ull);
         int fired_here = 0;
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         for (;;) {
             if (s->live == 0) {
                 coro_status result = scope_drain_locked(rt, s, &timed_out);
                 return timed_out ? CORO_ECANCELED : result;
             }
             if (!fired_here) {
-                int wrc = pthread_cond_timedwait(&rt->settled,
-                                                 &rt->act_lock, &ts);
-                if (wrc == ETIMEDOUT) {
+                /* Nonzero means the absolute deadline passed (the shim keeps
+                   the POSIX contract: a timeout is never reported early, even
+                   though Windows timers can fire a little early and re-arm). */
+                int wrc = coro_plat_cond_timedwait_ns(&rt->settled,
+                                                      &rt->act_lock, deadline);
+                if (wrc != 0) {
                     fired_here = 1;
                     uint64_t zero = 0;
                     int won = coro_at_cas(
                         (volatile uint64_t*)&s->timer_fired, &zero, 1);
-                    pthread_mutex_unlock(&rt->act_lock);
+                    coro_plat_mutex_unlock(&rt->act_lock);
                     if (won) (void)coro_rt_scope_cancel(rt, s);
-                    pthread_mutex_lock(&rt->act_lock);
+                    coro_plat_mutex_lock(&rt->act_lock);
                 }
                 continue;
             }
-            pthread_cond_wait(&rt->settled, &rt->act_lock);
+            coro_plat_cond_wait(&rt->settled, &rt->act_lock);
         }
     }
 
@@ -706,7 +710,7 @@ coro_status coro_rt_scope_wait_for(coro_rt_t* rt, coro_rt_scope_t* s,
        winner. */
     coro_status result = CORO_OK;
     for (;;) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (s->live == 0) {
             result = scope_drain_locked(rt, s, &timed_out);
             break;
@@ -725,9 +729,9 @@ coro_status coro_rt_scope_status(const coro_rt_scope_t* s) {
     if (scope_state_load(s) == SCOPE_DESTROYED) return CORO_ESTALE;
     coro_rt_t* rt = scope_bound_rt(s);
     if (!rt) return CORO_OK;   /* never bound: no child could have published */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     coro_status agg = scope_status_load(s);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     return agg;
 }
 

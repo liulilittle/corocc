@@ -13,19 +13,12 @@
  * test_coro_crossresume.c.
  */
 
-#if defined(_WIN32)
-static void run_tests(void) {
-    CHECK(0 && "multithreaded suites: POSIX threads only in M3");
-}
-TEST_MAIN()
-#else
-
-#include <pthread.h>
+#include "../palt_threads.h"
 
 #define WORKERS 4u
 
 static int g_worker_ok = 1;
-static pthread_barrier_t g_barrier;
+static pt_barrier_t g_barrier;
 
 static void entry_park_each_round(void* arg) {
     (void)arg;
@@ -36,7 +29,7 @@ static void entry_park_each_round(void* arg) {
 /* Each worker runs a complete coroutine lifecycle on its own thread. */
 static void* worker(void* pv) {
     (void)pv;
-    pthread_barrier_wait(&g_barrier);
+    pt_barrier_wait(&g_barrier);
 
     coro_t* own = NULL;
     coro_token t = CORO_TOKEN_NONE, nx = CORO_TOKEN_NONE;
@@ -55,7 +48,7 @@ static void* worker(void* pv) {
 }
 
 static void run_tests(void) {
-    pthread_t th[WORKERS];
+    pt_thread_t th[WORKERS];
     coro_t* c = NULL;
     coro_token tok = CORO_TOKEN_NONE, next = CORO_TOKEN_NONE;
 
@@ -63,9 +56,9 @@ static void run_tests(void) {
     CHECK(coro_create(&c, NULL, entry_park_each_round, NULL) == CORO_OK);
     CHECK(coro_start(c, &tok) == CORO_OK);
 
-    CHECK(pthread_barrier_init(&g_barrier, NULL, WORKERS) == 0);
+    CHECK(pt_barrier_init(&g_barrier, WORKERS) == 0);
     for (unsigned i = 0; i < WORKERS; ++i) {
-        CHECK(pthread_create(&th[i], NULL, worker, NULL) == 0);
+        CHECK(pt_thread_create(&th[i], worker, NULL) == 0);
     }
     /* the main flow keeps driving its own coroutine while the workers work */
     coro_cancel(c);
@@ -73,7 +66,7 @@ static void run_tests(void) {
     CHECK(next == CORO_TOKEN_DEAD);
 
     for (unsigned i = 0; i < WORKERS; ++i) {
-        pthread_join(th[i], NULL);
+        pt_thread_join(th[i]);
     }
     CHECK(g_worker_ok == 1);
 
@@ -82,4 +75,3 @@ static void run_tests(void) {
 }
 
 TEST_MAIN()
-#endif

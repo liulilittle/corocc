@@ -113,6 +113,38 @@ static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
 
 #include <intrin.h>
 
+/* The intrinsics below take the address of a 64-bit word, and the wrappers
+   cast freely between uint64_t*, long long* and void*. Those casts are only
+   sound while the atomic word really is one 8-byte, 8-byte-aligned unit
+   (aligned 8-byte accesses are also the ones the hardware keeps atomic).
+   C99 has no static_assert, so the negative-array-size trick carries the
+   check; MSVC's C front end supports __alignof. */
+typedef char coro_atomic_word_size_must_be_8[(sizeof(uint64_t) == 8) ? 1 : -1];
+typedef char coro_atomic_word_align_must_be_8[(__alignof(uint64_t) == 8) ? 1 : -1];
+
+/* Fast path (x64, default on): a plain volatile access plus a compiler
+   barrier. MSVC's volatile keeps its acquire/release meaning and x64
+   hardware is TSO, so the load/store pair needs no lock-prefixed
+   instruction; the one place where store-load order matters (the Chase-Lev
+   singleton race) goes through coro_at_fence below, which stays a full
+   fence. Define COROCC_ATOMIC_NO_FASTPATH to fall back to the interlocked
+   forms (A/B measurement switch; the decision is recorded in the M9 design,
+   section 2.5). MSVC ARM64 is outside the M9 scope. */
+#if defined(_M_X64) && !defined(COROCC_ATOMIC_NO_FASTPATH)
+
+static inline uint64_t coro_at_load(const volatile uint64_t* p) {
+    uint64_t v = *p;
+    _ReadWriteBarrier();
+    return v;
+}
+
+static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
+    _ReadWriteBarrier();
+    *p = v;
+}
+
+#else /* interlocked fallback; also the MSVC non-x64 spellings */
+
 /* MSVC has no plain 64-bit load intrinsic; a compare-exchange against the
    current value both reads it and leaves it untouched. */
 static inline uint64_t coro_at_load(const volatile uint64_t* p) {
@@ -124,8 +156,16 @@ static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
     _InterlockedExchange64((volatile long long*)p, (long long)v);
 }
 
+#endif /* _M_X64 fast path */
+
+/* Zero-spin accounting (mirrors the GCC path above): every compare-and-swap
+   attempt is counted when COROCC_PROBE_NOSPIN is defined, so the zero-spin
+   test measures the same fixed-attempt contract on MSVC. */
 static inline int coro_at_cas(volatile uint64_t* p, uint64_t* expected,
                               uint64_t desired) {
+#ifdef COROCC_PROBE_NOSPIN
+    ++coro_probe_cas_count;
+#endif
     uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
         (volatile long long*)p, (long long)desired, (long long)*expected);
     if (observed == *expected) return 1;
@@ -159,13 +199,21 @@ static inline uint64_t coro_at_and(volatile uint64_t* p, uint64_t v) {
 }
 
 static inline void coro_at_fence(void) {
+    /* A full fence without <windows.h>: the compiler barrier orders the
+       source, __faststorefence orders the hardware. On x64 that pair is
+       exactly what winnt.h's MemoryBarrier expands to, which keeps this
+       internal header free of the Windows SDK (the M9 W2a fix for the
+       "MemoryBarrier undeclared" build failure). x64 MSVC is the M9 scope. */
     _ReadWriteBarrier();
-    MemoryBarrier();
+    __faststorefence();
 }
 
 static inline uint64_t coro_at_cas_value(volatile uint64_t* p,
-                                        uint64_t expected, uint64_t desired) {
+                                         uint64_t expected, uint64_t desired) {
     for (;;) {
+#ifdef COROCC_PROBE_NOSPIN
+        ++coro_probe_cas_count;
+#endif
         uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
             (volatile long long*)p, (long long)desired, (long long)expected);
         if (observed == expected) return expected;

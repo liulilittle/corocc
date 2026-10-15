@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep in the thread-side wait below */
+#endif
+
 /* L2 hardening set (R1-R4): the runtime behaviours the structured-concurrency
  * layer is built on, each pinned against a defect the dual audit red-proved
  * on the pre-fix runtime.
@@ -31,10 +35,14 @@ static void quick_entry(void* arg) { (void)arg; }
 /* A short thread-side wait used where a coroutine must be observed in a
    state that only the passage of time can guarantee. */
 static void sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 /* ---- join: every waiter is released when the target dies ---- */

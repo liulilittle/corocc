@@ -12,14 +12,7 @@
  *   - a coroutine that already died reports that instead of waking anybody.
  */
 
-#if defined(_WIN32)
-static void run_tests(void) {
-    CHECK(0 && "cross-thread suites: POSIX threads only in M3");
-}
-TEST_MAIN()
-#else
-
-#include <pthread.h>
+#include "../palt_threads.h"
 #include <string.h>
 
 #define WAKERS 4u
@@ -27,8 +20,8 @@ TEST_MAIN()
 /* A gate that releases every caller of a phase together, so all the resumes
    of a phase race for the same credential. Waiting on it is a condition
    variable, never a spin. */
-static pthread_mutex_t g_gate_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_gate_cond = PTHREAD_COND_INITIALIZER;
+static pt_mutex_t g_gate_lock = PT_MUTEX_INITIALIZER;
+static pt_cond_t  g_gate_cond = PT_COND_INITIALIZER;
 static int             g_gate_open;
 
 static coro_t*     g_c;
@@ -47,11 +40,11 @@ static void entry_count_rounds(void* arg) {
 /* Presents the live credential from this foreign thread and drives directly. */
 static void* waker(void* pv) {
     unsigned slot = (unsigned)(uintptr_t)pv;
-    pthread_mutex_lock(&g_gate_lock);
+    pt_mutex_lock(&g_gate_lock);
     while (!g_gate_open) {
-        pthread_cond_wait(&g_gate_cond, &g_gate_lock);
+        pt_cond_wait(&g_gate_cond, &g_gate_lock);
     }
-    pthread_mutex_unlock(&g_gate_lock);
+    pt_mutex_unlock(&g_gate_lock);
     g_wrc[slot] = coro_resume(g_c, g_live, &g_wout[slot]);
     return NULL;
 }
@@ -59,24 +52,24 @@ static void* waker(void* pv) {
 /* Starts `count` foreign callers and releases them together; every caller
    drives the coroutine on its own thread, so the main thread only joins. */
 static void run_wakers(unsigned count) {
-    pthread_t t[WAKERS];
+    pt_thread_t t[WAKERS];
     CHECK(count >= 1u && count <= WAKERS);
 
-    pthread_mutex_lock(&g_gate_lock);
+    pt_mutex_lock(&g_gate_lock);
     g_gate_open = 0;
-    pthread_mutex_unlock(&g_gate_lock);
+    pt_mutex_unlock(&g_gate_lock);
     memset(g_wrc, 0, sizeof g_wrc);
     memset(g_wout, 0, sizeof g_wout);
     for (unsigned i = 0; i < count; ++i) {
-        CHECK(pthread_create(&t[i], NULL, waker, (void*)(uintptr_t)i) == 0);
+        CHECK(pt_thread_create(&t[i], waker, (void*)(uintptr_t)i) == 0);
     }
-    pthread_mutex_lock(&g_gate_lock);
+    pt_mutex_lock(&g_gate_lock);
     g_gate_open = 1;
-    pthread_cond_broadcast(&g_gate_cond);
-    pthread_mutex_unlock(&g_gate_lock);
+    pt_cond_broadcast(&g_gate_cond);
+    pt_mutex_unlock(&g_gate_lock);
 
     for (unsigned i = 0; i < count; ++i) {
-        pthread_join(t[i], NULL);
+        pt_thread_join(t[i]);
     }
 }
 
@@ -136,4 +129,3 @@ static void run_tests(void) {
 }
 
 TEST_MAIN()
-#endif

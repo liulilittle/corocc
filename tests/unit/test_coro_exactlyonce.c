@@ -15,14 +15,7 @@
  * manual resume drives directly.
  */
 
-#if defined(_WIN32)
-static void run_tests(void) {
-    CHECK(0 && "concurrent exactly-once suite: POSIX threads only in M3");
-}
-TEST_MAIN()
-#else
-
-#include <pthread.h>
+#include "../palt_threads.h"
 #include <string.h>
 
 #define THREADS 8u
@@ -32,7 +25,7 @@ static coro_t*           g_c;
 static coro_token        g_tok;
 static coro_status       g_rc[THREADS];
 static coro_token        g_out[THREADS];
-static pthread_barrier_t g_barrier;
+static pt_barrier_t g_barrier;
 
 static void entry_park_each_round(void* arg) {
     (void)arg;
@@ -44,21 +37,21 @@ static void entry_park_each_round(void* arg) {
 /* A racer presents the live credential and drives the coroutine on its own
    thread; exactly one racer wins the claim. */
 static void* racer(void* pv) {
-    long id = (long)pv;
-    pthread_barrier_wait(&g_barrier);
+    uintptr_t id = (uintptr_t)pv;
+    pt_barrier_wait(&g_barrier);
     g_rc[id] = coro_resume(g_c, g_tok, &g_out[id]);
     return NULL;
 }
 
 /* Releases every racer against the same credential and joins them all; the
    racers drive directly, so the main thread only joins. */
-static int race_each_round(pthread_t* th) {
+static int race_each_round(pt_thread_t* th) {
     int success = 0;
     for (unsigned i = 0; i < THREADS; ++i) {
-        CHECK(pthread_create(&th[i], NULL, racer, (void*)(long)i) == 0);
+        CHECK(pt_thread_create(&th[i], racer, (void*)(uintptr_t)i) == 0);
     }
     for (unsigned i = 0; i < THREADS; ++i) {
-        pthread_join(th[i], NULL);
+        pt_thread_join(th[i]);
     }
     for (unsigned i = 0; i < THREADS; ++i) {
         if (g_rc[i] == CORO_OK) {
@@ -89,14 +82,14 @@ static void finish_coroutine(coro_t* c, coro_token tok) {
 }
 
 static void run_tests(void) {
-    pthread_t th[THREADS];
+    pt_thread_t th[THREADS];
     int success = 0;
     coro_token winner_tok = CORO_TOKEN_NONE;
 
     /* ---------- concurrent claim of one credential ---------- */
     CHECK(coro_create(&g_c, NULL, entry_park_each_round, NULL) == CORO_OK);
     CHECK(coro_start(g_c, &g_tok) == CORO_OK);
-    CHECK(pthread_barrier_init(&g_barrier, NULL, THREADS) == 0);
+    CHECK(pt_barrier_init(&g_barrier, THREADS) == 0);
 
     memset(g_rc, 0, sizeof g_rc);
     memset(g_out, 0, sizeof g_out);
@@ -134,4 +127,3 @@ static void run_tests(void) {
 }
 
 TEST_MAIN()
-#endif

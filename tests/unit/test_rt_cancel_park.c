@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep in the thread-side wait below */
+#endif
+
 /* D23 family (W11 dual-audit v1.2): a cancellation consumed at a park's
  * safe point -- the yield never switches out -- must leave the node usable.
  * Every park site retires RT_WAITING and RT_PARKED in its cancel branch, so
@@ -28,10 +32,14 @@
 
 /* A short thread-side wait, for the sleep site's post-deadline window. */
 static void sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 /* ---- mutex ---- */

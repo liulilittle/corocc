@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep in the thread-side wait below */
+#endif
+
 /* L3 step 2: the cell contract (verdict section 3.5).
  *
  *   - the trampoline is the only writer of a child's result cell: the
@@ -72,10 +76,14 @@ static coro_status cancel_aware_entry(void* arg) {
 }
 
 static void sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 static void run_tests(void) {

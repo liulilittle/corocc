@@ -44,6 +44,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep; coro_monotonic_ns is declared by coro_sched.h */
+#endif
+
 #define SW_ITERS    4000000UL   /* round trips per coroutine */
 #define ALLOC_ROUNDS 20000      /* spawn/collect cost sampling rounds */
 #define REPEATS     5           /* timed repeats; the median is reported */
@@ -68,9 +72,13 @@ static void spinner(void* pv) {
 static void quick_entry(void* arg) { (void)arg; }
 
 static double now_s(void) {
+#if defined(_WIN32)
+    return (double)coro_monotonic_ns() / 1e9;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+#endif
 }
 
 static int cmp_double(const void* a, const void* b) {
@@ -89,8 +97,12 @@ static double pure_repeat(int ncoro, unsigned long* out_total) {
         }
     }
     /* let every coroutine reach its warm-up loop (parked, not timed) */
+#if defined(_WIN32)
+    Sleep(50); /* the same 50 ms quantity the POSIX nanosleep below uses */
+#else
     struct timespec ts = {0, 50 * 1000 * 1000};
     nanosleep(&ts, NULL);
+#endif
 
     g_go = 1;
     double t0 = now_s();

@@ -40,7 +40,16 @@ static void entry_sleep_long(void* arg) {
     if (st == CORO_ECANCELED) ++g_cancel_woken;
 }
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h>
+#include <process.h>
+/* Cancels the target after a short pause, from another thread (Win32). */
+static unsigned __stdcall cancel_after_a_while(void* pv) {
+    Sleep(20); /* 20 ms: the loop is parked by now */
+    CHECK(coro_cancel((coro_t*)pv) == CORO_OK);
+    return 0;
+}
+#else
 #include <pthread.h>
 #include <unistd.h>
 /* Cancels the target after a short pause, from another thread. */
@@ -85,6 +94,22 @@ static void run_tests(void) {
 
     /* ---------- a cancellation cuts a long sleep short ---------- */
     {
+#if defined(_WIN32)
+        HANDLE canceller;
+        coro_t* target = NULL;
+        CHECK(coro_sched_spawn_h(s, NULL, entry_sleep_long, NULL, &target) == CORO_OK);
+        CHECK(target != NULL);
+        /* the canceller runs on another thread, the way a real user would,
+           because the loop itself blocks until the deadline it is given */
+        canceller = (HANDLE)_beginthreadex(NULL, 0, cancel_after_a_while,
+                                          target, 0, NULL);
+        CHECK(canceller != NULL);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        WaitForSingleObject(canceller, INFINITE);
+        CloseHandle(canceller);
+        CHECK(coro_sched_pending(s) == 0u);
+        CHECK(g_cancel_woken == 1u);
+#else
         pthread_t canceller;
         coro_t* target = NULL;
         CHECK(coro_sched_spawn_h(s, NULL, entry_sleep_long, NULL, &target) == CORO_OK);
@@ -96,6 +121,7 @@ static void run_tests(void) {
         pthread_join(canceller, NULL);
         CHECK(coro_sched_pending(s) == 0u);
         CHECK(g_cancel_woken == 1u);
+#endif
     }
 
     /* cancelling something this scheduler does not own is refused */

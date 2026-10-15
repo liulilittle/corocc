@@ -30,14 +30,24 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep */
+#endif
+
 static void quick(void* arg) { (void)arg; }
 
 static void nap_us(unsigned us) {
     if (getenv("D25_SPIN")) return;   /* maximum collect pressure mode */
+#if defined(_WIN32)
+    /* Windows timer granularity is milliseconds; round the microsecond
+       request up so a real (never busy) sleep is taken. */
+    Sleep((DWORD)((us + 999u) / 1000u));
+#else
     struct timespec ts;
     ts.tv_sec = 0;
     ts.tv_nsec = (long)us * 1000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 int main(int argc, char** argv) {

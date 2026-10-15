@@ -17,8 +17,17 @@
  */
 
 #if defined(_WIN32)
+/* Registered on POSIX only (see tests/CMakeLists.txt). MSVC has no
+   ThreadSanitizer; the purpose of this suite is TSan visibility, which a
+   Win32 build cannot provide —— building it there would yield false
+   coverage. */
 static void run_tests(void) {
-    CHECK(0 && "runtime concurrency suite: POSIX threads only in M3");
+    /* Through a variable: a literal condition trips MSVC /W4 C4127. */
+    int tsan_visibility_available = 0;
+    CHECK(tsan_visibility_available &&
+          "MSVC has no ThreadSanitizer; the purpose of this suite is TSan "
+          "visibility, which a Win32 build cannot provide —— building it "
+          "there would yield false coverage.");
 }
 TEST_MAIN()
 #else

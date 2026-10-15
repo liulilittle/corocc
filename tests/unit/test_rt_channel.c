@@ -152,10 +152,11 @@ static void run_unbounded(void) {
     g_total = 0;
     CHECK(coro_rt_spawn(rt, NULL, unbounded_producer, rt) == CORO_OK);
     CHECK(coro_rt_wait_all(rt) == CORO_OK);
-    CHECK(coro_rt_destroy(rt) == CORO_OK);
     CHECK(g_total == MSGS);
     CHECK(coro_rt_channel_size(&g_ch) == MSGS);
-    /* Unbounded: nothing blocked the producer. Drain, then destroy. */
+    /* Unbounded: nothing blocked the producer. Drain, then destroy. The try
+       paths take the runtime's activity lock, so the runtime must still be
+       alive while the channel is drained. */
     {
         void* v = NULL;
         for (uint64_t i = 0; i < MSGS; ++i)
@@ -163,6 +164,7 @@ static void run_unbounded(void) {
         CHECK(coro_rt_channel_tryrecv(rt, &g_ch, &v) == CORO_EBUSY);
         CHECK(coro_rt_channel_destroy(&g_ch) == CORO_OK);
     }
+    CHECK(coro_rt_destroy(rt) == CORO_OK);
 }
 
 /* ---- blocking send released by recv, and vice versa ---------------- */
@@ -208,16 +210,18 @@ static void run_blocking(void) {
         CHECK(coro_rt_spawn(rt, NULL, blocking_sender, rt) == CORO_OK);
         CHECK(coro_rt_spawn(rt, NULL, blocking_receiver, rt) == CORO_OK);
         CHECK(coro_rt_wait_all(rt) == CORO_OK);
-        CHECK(coro_rt_destroy(rt) == CORO_OK);
         CHECK(g_sent == 1);
         CHECK(g_got == 1);   /* the buffered item, then the sender's item */
         CHECK(coro_rt_channel_size(&g_ch) == 1);
-        /* Drain the leftover, then the channel is destroyable. */
+        /* Drain the leftover, then the channel is destroyable. The try path
+           takes the runtime's activity lock, so the runtime stays alive until
+           the drain is done. */
         {
             void* v = NULL;
             CHECK(coro_rt_channel_tryrecv(rt, &g_ch, &v) == CORO_OK);
             CHECK(coro_rt_channel_destroy(&g_ch) == CORO_OK);
         }
+        CHECK(coro_rt_destroy(rt) == CORO_OK);
     }
 }
 
@@ -300,15 +304,17 @@ static void run_close(void) {
         CHECK(coro_rt_spawn(rt, NULL, parked_sender, rt) == CORO_OK);
         CHECK(coro_rt_spawn(rt, NULL, close_reenactor, rt) == CORO_OK);
         CHECK(coro_rt_wait_all(rt) == CORO_OK);
-        CHECK(coro_rt_destroy(rt) == CORO_OK);
         /* The waiter was released and refused the send, so nothing was added. */
         CHECK(g_send_close_seen == CORO_ECLOSED);
         CHECK(g_woke_senders == 0);
         CHECK(coro_rt_channel_size(&g_ch) == 1);   /* only the original item */
         void* v = NULL;
+        /* The drain's try path takes the runtime's activity lock, so the
+           runtime stays alive until the channel is drained. */
         CHECK(coro_rt_channel_tryrecv(rt, &g_ch, &v) == CORO_OK);  /* drained */
         CHECK(coro_rt_channel_tryrecv(rt, &g_ch, &v) == CORO_ECLOSED);
         CHECK(coro_rt_channel_destroy(&g_ch) == CORO_OK);
+        CHECK(coro_rt_destroy(rt) == CORO_OK);
     }
 }
 
@@ -390,7 +396,6 @@ static void run_cancel(void) {
 
     CHECK(coro_rt_spawn(rt, NULL, cx_controller, rt) == CORO_OK);
     CHECK(coro_rt_wait_all(rt) == CORO_OK);
-    CHECK(coro_rt_destroy(rt) == CORO_OK);
 
     /* The cancelled sender either completed its own send (retry-first) or
        abstained, and either way the sender behind it still got its item
@@ -406,11 +411,14 @@ static void run_cancel(void) {
         /* No more than the configured capacity is ever buffered. */
         CHECK(left <= 1);
         void* rest = NULL;
+        /* Drain while the runtime is still alive: the try path takes its
+           activity lock. */
         while (coro_rt_channel_size(&g_cx) > 0)
             (void)coro_rt_channel_tryrecv(rt, &g_cx, &rest);
         CHECK(coro_rt_channel_size(&g_cx) == 0);
     }
     CHECK(coro_rt_channel_destroy(&g_cx) == CORO_OK);
+    CHECK(coro_rt_destroy(rt) == CORO_OK);
 }
 
 

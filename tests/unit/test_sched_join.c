@@ -87,13 +87,16 @@ static void run_tests(void) {
     }
     CHECK(coro_sched_pending(s) == 0u);
 
-    /* ---------- joining a finished target is reported ---------- */
+    /* ---------- a finished target leaves nothing behind ---------- */
     {
         coro_t* done = NULL;
         CHECK(coro_sched_spawn_h(s, NULL, entry_target, NULL, &done) == CORO_OK);
         CHECK(coro_sched_wait_all(s) == CORO_OK); /* it runs to completion */
-        /* a second join of the same handle is refused: it no longer exists */
-        CHECK(coro_sched_join(s, done) == CORO_EDESTROYED);
+        /* The handle belongs to the scheduler and is released when the
+           coroutine finishes (coro_sched.h), so it must not be used again
+           after this point -- a second join of it would be a use-after-free,
+           not a query. What stays observable is the scheduler's own
+           accounting: the finished coroutine leaves no live entry behind. */
         CHECK(coro_sched_pending(s) == 0u);
     }
 

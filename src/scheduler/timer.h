@@ -18,6 +18,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <corocc/coro_status.h> /* COROCC_API: same linkage as coro_sched.h's
+                                   declaration of coro_monotonic_ns. Two plain
+                                   vs decorated declarations of one function in
+                                   one TU are C2375 under MSVC (dllimport /
+                                   dllexport mismatch). */
+
 /** coro_timer_node -- one deadline; the owner embeds it by value. */
 typedef struct coro_timer_node {
     uint64_t deadline;   /**< Absolute monotone nanoseconds. */
@@ -37,7 +43,7 @@ typedef struct coro_timer_heap {
  * @return Nanoseconds from an unspecified epoch; only differences are
  *         meaningful. Never decreases within a process.
  */
-uint64_t coro_monotonic_ns(void);
+COROCC_API uint64_t coro_monotonic_ns(void);
 
 /** coro_timer_heap_init -- prepare an empty heap. */
 void coro_timer_heap_init(coro_timer_heap* h);

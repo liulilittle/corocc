@@ -82,7 +82,15 @@ int coro_ctx_init(coro_ctx* cx, const coro_stack* stk,
     cx->back  = NULL; /* set by the resumer at the first swap */
 
     uintptr_t hi = (uintptr_t)stk->lo + stk->usable; /* stack top (high addr) */
-    cx->fctx = corocc_asm_make((void*)hi, 0, ctx_trampoline);
+    /* The PE/MASM backend records the stack bounds from (top, size) into the
+       context's NT_TIB fields (StackBase = top, StackLimit = top - size) and
+       restores them on every switch, which is what the Windows CRT consults
+       when it validates the stack (debug-build GS reporting, _chkstk). A size
+       of 0 would leave StackBase == StackLimit (an empty range) and a CRT
+       call from inside the coroutine would fail that validation; the SysV
+       backend ignores the size argument, so passing the usable size is the
+       portable spelling. */
+    cx->fctx = corocc_asm_make((void*)hi, stk->usable, ctx_trampoline);
     cx->stack = stk;
     return CORO_OK;
 }

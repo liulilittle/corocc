@@ -29,11 +29,10 @@
 #include <time.h>
 
 #if defined(__linux__)
-#include <unistd.h>
+#include <unistd.h>   /* sysconf: default worker count */
 #endif
-
 #if defined(_WIN32)
-#error "corocc: the M:N runtime arrives on Windows with milestone M9"
+#include <windows.h>  /* GetSystemInfo: default worker count */
 #endif
 
 /* ---- atomic node state ---- */
@@ -85,21 +84,21 @@ static void live_add(coro_rt_t* rt, long d) {
 
 static void live_notify(coro_rt_t* rt) {
     if (coro_at_load((volatile uint64_t*)&rt->live) == 0) {
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         ++rt->act_gen;
-        pthread_cond_broadcast(&rt->act_cond);
-        pthread_cond_broadcast(&rt->settled);
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_cond_broadcast(&rt->act_cond);
+        coro_plat_cond_broadcast(&rt->settled);
+        coro_plat_mutex_unlock(&rt->act_lock);
     }
 }
 
 /* Wake every idle worker: bump the generation under the activity lock and
    broadcast, so a producer that raises work always wakes the sleepers. */
 static void signal_activity(coro_rt_t* rt) {
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     ++rt->act_gen;
-    pthread_cond_broadcast(&rt->act_cond);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_cond_broadcast(&rt->act_cond);
+    coro_plat_mutex_unlock(&rt->act_lock);
 }
 
 /* Requeue a parked node onto its owner worker and raise the idle signal. The
@@ -188,12 +187,12 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
        worker still frees it exclusively. */
     rt_node* waiter;
     int retained;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     retained = node_test(n, RT_RETAINED);
     waiter = n->waiter_next;
     n->waiter_next = NULL;
     node_set_rel(n, RT_DONE);   /* publish: retire's LAST write to n */
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     while (waiter) {
         rt_node* next = waiter->waiter_next;
         waiter->waiter_next = NULL;
@@ -272,19 +271,17 @@ static void worker_main(void* pv) {
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
         if (t) deadline = t->deadline;
 
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         if (!coro_at_load((volatile uint64_t*)&w->stop) &&
             wsdeque_empty(&w->queue) && mpsc_empty(&w->inbox)) {
-            struct timespec ts;
             if (deadline) {
-                ts.tv_sec = (time_t)(deadline / 1000000000ull);
-                ts.tv_nsec = (long)(deadline % 1000000000ull);
-                pthread_cond_timedwait(&rt->act_cond, &rt->act_lock, &ts);
+                (void)coro_plat_cond_timedwait_ns(&rt->act_cond,
+                                                  &rt->act_lock, deadline);
             } else {
-                pthread_cond_wait(&rt->act_cond, &rt->act_lock);
+                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
             }
         }
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
     }
 }
 
@@ -302,6 +299,10 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         long n = 4;
 #if defined(__linux__)
         n = sysconf(_SC_NPROCESSORS_ONLN);
+#elif defined(_WIN32)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        n = (long)si.dwNumberOfProcessors;
 #endif
         if (n < 1) n = 1;
         if (n > 64) n = 64;
@@ -314,13 +315,15 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         free(rt);
         return NULL;
     }
+    /* The Windows lock/condition pair (SRWLOCK/CONDITION_VARIABLE) is usable
+       in its zero-initialized state, so no mutex init exists there; the
+       condition init keeps the POSIX monotone-clock binding, which is what
+       makes the absolute deadlines below share the timer heap's scale. */
+#if !defined(_WIN32)
     pthread_mutex_init(&rt->act_lock, NULL);
-    pthread_condattr_t ca;
-    pthread_condattr_init(&ca);
-    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-    pthread_cond_init(&rt->act_cond, &ca);
-    pthread_cond_init(&rt->settled, &ca);
-    pthread_condattr_destroy(&ca);
+#endif
+    coro_plat_cond_init(&rt->act_cond);
+    coro_plat_cond_init(&rt->settled);
 
     size_t started = 0;
     for (; started < nthreads; ++started) {
@@ -338,9 +341,11 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
             coro_thread_join(rt->workers[j].thread);
             coro_timer_heap_destroy(&rt->workers[j].sleepers);
         }
+#if !defined(_WIN32)
         pthread_cond_destroy(&rt->act_cond);
         pthread_cond_destroy(&rt->settled);
         pthread_mutex_destroy(&rt->act_lock);
+#endif
         free(rt->workers);
         free(rt);
         return NULL;
@@ -421,11 +426,11 @@ coro_status coro_rt_collect(coro_rt_t* rt, coro_t* c) {
 
 coro_status coro_rt_wait_all(coro_rt_t* rt) {
     if (!rt) return CORO_EINVAL;
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     while (coro_at_load((volatile uint64_t*)&rt->live) > 0) {
-        pthread_cond_wait(&rt->settled, &rt->act_lock);
+        coro_plat_cond_wait(&rt->settled, &rt->act_lock);
     }
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
     return CORO_OK;
 }
 
@@ -447,16 +452,16 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
        above and this append reports EDESTROYED instead of parking on a
        chain nobody will walk again, and the retire walk can never consume
        the chain between the check and the append. */
-    pthread_mutex_lock(&rt->act_lock);
+    coro_plat_mutex_lock(&rt->act_lock);
     if (node_test(target, RT_DONE) || coro_get_state(c) == CORO_DEAD) {
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_EDESTROYED;
     }
     self->waiter_next = target->waiter_next;
     target->waiter_next = self;
     node_set(self, RT_WAITING);
     node_set(self, RT_PARKED);
-    pthread_mutex_unlock(&rt->act_lock);
+    coro_plat_mutex_unlock(&rt->act_lock);
 
     coro_status st = coro_yield();
     if (st != CORO_OK) {
@@ -467,7 +472,7 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
            walk this node after the coroutine freed it. A retire that beat us
            has already unlinked the whole chain; detaching what is not there
            is a no-op. */
-        pthread_mutex_lock(&rt->act_lock);
+        coro_plat_mutex_lock(&rt->act_lock);
         rt_node** p = &target->waiter_next;
         while (*p) {
             if (*p == self) {
@@ -495,7 +500,7 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
         if (node_test(target, RT_DONE) || coro_get_state(c) == CORO_DEAD) {
             ret = CORO_OK;
         }
-        pthread_mutex_unlock(&rt->act_lock);
+        coro_plat_mutex_unlock(&rt->act_lock);
         return ret;
     }
     return CORO_OK;
@@ -580,9 +585,11 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
         coro_thread_join(rt->workers[i].thread);
         coro_timer_heap_destroy(&rt->workers[i].sleepers);
     }
+#if !defined(_WIN32)
     pthread_cond_destroy(&rt->act_cond);
     pthread_cond_destroy(&rt->settled);
     pthread_mutex_destroy(&rt->act_lock);
+#endif
     free(rt->workers);
     free(rt);
     return CORO_OK;

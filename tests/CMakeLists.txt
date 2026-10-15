@@ -114,15 +114,23 @@ if (NOT WIN32)
 endif()
 add_test(NAME coro_crossresume COMMAND test_coro_crossresume)
 
-# M3 concurrency suites. Only registered when the platform provides POSIX
-# threads. The TSan-visible suite needs the internal headers, so it also gets
-# the source root on its include path.
+# M3 concurrency suites. Both are built on every platform now (the sources
+# go through tests/palt_threads.h); the TSan-visible suite below is the one
+# exception. The TSan suite needs the internal headers, so it also gets the
+# source root on its include path.
+add_executable(test_conc_double_resume concurrency/test_conc_double_resume.c)
+target_link_libraries(test_conc_double_resume PRIVATE corocc)
 if (NOT WIN32)
     find_package(Threads REQUIRED)
-    add_executable(test_conc_double_resume concurrency/test_conc_double_resume.c)
-    target_link_libraries(test_conc_double_resume PRIVATE corocc Threads::Threads)
-    add_test(NAME conc_double_resume COMMAND test_conc_double_resume)
+    target_link_libraries(test_conc_double_resume PRIVATE Threads::Threads)
+endif()
+add_test(NAME conc_double_resume COMMAND test_conc_double_resume)
 
+# Registered on POSIX only. MSVC has no ThreadSanitizer; the purpose of this
+# suite is TSan visibility, which a Win32 build cannot provide —— building it
+# there would yield false coverage. (M9 verdict item 7, verbatim.)
+if (NOT WIN32)
+    find_package(Threads REQUIRED)
     add_executable(test_conc_runtime_tsan concurrency/test_conc_runtime_tsan.c)
     target_include_directories(test_conc_runtime_tsan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_conc_runtime_tsan PRIVATE corocc Threads::Threads)
@@ -149,10 +157,12 @@ add_test(NAME sched_sleep COMMAND test_sched_sleep)
     target_link_libraries(test_sched_join PRIVATE corocc)
     add_test(NAME sched_join COMMAND test_sched_join)
 
-# M:N work-stealing runtime (L2).
-if (NOT WIN32)
-    find_package(Threads REQUIRED)
-    add_executable(test_rt_mn unit/test_rt_mn.c)
+# M:N work-stealing runtime (L2). M9: these suites build on Windows too --
+# the runtime layer uses the platform lock/condition shim, not pthreads.
+# Threads::Threads carries -pthread on POSIX only; on MSVC FindThreads
+# yields an empty imported target (no libraries to add).
+find_package(Threads REQUIRED)
+add_executable(test_rt_mn unit/test_rt_mn.c)
     target_include_directories(test_rt_mn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_mn PRIVATE corocc Threads::Threads)
     add_test(NAME rt_mn COMMAND test_rt_mn)
@@ -249,27 +259,30 @@ if (NOT WIN32)
     target_link_libraries(test_rt_scope_thread PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_thread COMMAND test_rt_scope_thread)
     set_tests_properties(rt_scope_thread PROPERTIES TIMEOUT 120)
-endif()
 
 # Custom allocator interface (openppp2-style).
 add_executable(test_coro_allocator unit/test_coro_allocator.c)
 target_link_libraries(test_coro_allocator PRIVATE corocc)
 add_test(NAME coro_allocator COMMAND test_coro_allocator)
 
-# M:N runtime benchmark (not a ctest: reports throughput).
-if (NOT WIN32)
-    find_package(Threads REQUIRED)
-    add_executable(bench_rt_mn ../perf/bench_rt_mn.c)
-    target_link_libraries(bench_rt_mn PRIVATE corocc Threads::Threads)
+# M:N runtime benchmark (not a ctest: reports throughput). M9: built on
+# Windows too now that the timed sources are platform-portable.
+find_package(Threads REQUIRED)
+add_executable(bench_rt_mn ../perf/bench_rt_mn.c)
+target_link_libraries(bench_rt_mn PRIVATE corocc Threads::Threads)
 
-    # Pure context-switch throughput (pre-spawned; the timed window holds
-    # only yield/drive round trips), plus the spawn/collect cost split.
-    add_executable(bench_switch_pure ../perf/bench_switch_pure.c)
-    target_link_libraries(bench_switch_pure PRIVATE corocc Threads::Threads)
+# Pure context-switch throughput (pre-spawned; the timed window holds
+# only yield/drive round trips), plus the spawn/collect cost split.
+add_executable(bench_switch_pure ../perf/bench_switch_pure.c)
+target_link_libraries(bench_switch_pure PRIVATE corocc Threads::Threads)
 
-    # D25 regression probe (perf/probe_collect_race.c): the collect-vs-retire
-    # window. Probabilistic red/green -- intentionally NOT a ctest target;
-    # run it repeatedly (see .opencode/logs/execR/D25/ for the proof scripts).
-    add_executable(probe_collect_race ../perf/probe_collect_race.c)
-    target_link_libraries(probe_collect_race PRIVATE corocc Threads::Threads)
+# D25 regression probe (perf/probe_collect_race.c): the collect-vs-retire
+# window. Probabilistic red/green -- intentionally NOT a ctest target;
+# run it repeatedly (see .opencode/logs/execR/D25/ for the proof scripts).
+add_executable(probe_collect_race ../perf/probe_collect_race.c)
+target_link_libraries(probe_collect_race PRIVATE corocc Threads::Threads)
+if (MSVC)
+    # getenv is flagged C4996 by the UCRT under /W4 /WX; the probe only reads
+    # one environment switch (D25_SPIN).
+    target_compile_definitions(probe_collect_race PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()

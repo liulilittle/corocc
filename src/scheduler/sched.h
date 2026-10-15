@@ -18,9 +18,7 @@
 
 #include <corocc/coro_sched.h>
 
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
+#include "platform/coro_plat_locks.h"
 
 #include "coroutine/coro_runtime.h"
 #include "scheduler/timer.h"
@@ -40,7 +38,7 @@ struct coro_sched {
     sched_node*  runq_head;   /**< runnable, in spawn order */
     sched_node*  runq_tail;
     coro_timer_heap sleepers; /**< deadlines of the sleeping nodes */
-    pthread_mutex_t timer_lock; /**< guards the heap; never held across a switch */
+    coro_plat_mutex_t timer_lock; /**< guards the heap; never held across a switch */
     coro_runtime* rt;        /**< runtime of the thread that runs the loop */
     sched_node** index;       /**< every live node, for wait_all */
     size_t       index_count;

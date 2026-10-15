@@ -14,8 +14,13 @@
 
 static void deep(void* a) {
     volatile char buf[128 * 1024]; /* far larger than the 64 KiB stack */
-    memset((void*)buf, 1, sizeof buf);
-    (void)buf;
+    size_t i;
+    /* Volatile stores: no optimizer may drop the frame or the writes (the
+       Release /LTCG build eliminated a memset through a cast that discarded
+       the volatile qualifier, frame and all). The first stores land below
+       the usable region and fault on the guard page, which is the entire
+       point of this test. */
+    for (i = 0; i < sizeof buf; ++i) buf[i] = 1;
     (void)a;
 }
 
@@ -57,39 +62,43 @@ static void run_tests(void) {
     DWORD code = 0;
 
     if (GetEnvironmentVariableA(COROCC_OVERFLOW_CHILD_ENV, NULL, 0) != 0) {
+        /* The child branch: runs the overflowing coroutine and never comes
+           back (the callee ends in _exit(2)). Written as an if/else so no
+           statement follows the non-returning call: the /LTCG inliner
+           proves the non-return and flags any trailing statement as
+           unreachable code (C4702, fatal under /WX). */
         run_overflowing_coroutine();
-        _exit(2); /* unreachable */
-    }
+    } else {
+        if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof exe) == 0) {
+            fail_msg("GetModuleFileName failed");
+            return;
+        }
+        memset(&si, 0, sizeof si);
+        si.cb = sizeof si;
+        memset(&pi, 0, sizeof pi);
+        SetEnvironmentVariableA(COROCC_OVERFLOW_CHILD_ENV, "1");
+        if (!CreateProcessA(exe, NULL, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            fail_msg("CreateProcess failed");
+            return;
+        }
+        SetEnvironmentVariableA(COROCC_OVERFLOW_CHILD_ENV, NULL);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
 
-    if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof exe) == 0) {
-        fail_msg("GetModuleFileName failed");
-        return;
-    }
-    memset(&si, 0, sizeof si);
-    si.cb = sizeof si;
-    memset(&pi, 0, sizeof pi);
-    SetEnvironmentVariableA(COROCC_OVERFLOW_CHILD_ENV, "1");
-    if (!CreateProcessA(exe, NULL, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        fail_msg("CreateProcess failed");
-        return;
-    }
-    SetEnvironmentVariableA(COROCC_OVERFLOW_CHILD_ENV, NULL);
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &code);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    /* The overflow must be FATAL, never a silent return. Accepted shapes:
-       - 0xC0000005 STATUS_ACCESS_VIOLATION: the PAGE_NOACCESS guard faulted;
-       - an ASan build may report 0xC0000409 STATUS_STACK_BUFFER_OVERRUN or
-         abort (exit code 3) on the same fault. */
-    {
-        int accepted = (code == 0xC0000005u);
+        /* The overflow must be FATAL, never a silent return. Accepted shapes:
+           - 0xC0000005 STATUS_ACCESS_VIOLATION: the PAGE_NOACCESS guard faulted;
+           - an ASan build may report 0xC0000409 STATUS_STACK_BUFFER_OVERRUN or
+             abort (exit code 3) on the same fault. */
+        {
+            int accepted = (code == 0xC0000005u);
 #if defined(COROCC_ASAN)
-        accepted = accepted || (code == 0xC0000409u) || (code == 3u);
+            accepted = accepted || (code == 0xC0000409u) || (code == 3u);
 #endif
-        if (!accepted) {
-            fail_msg("coroutine returned instead of faulting - guard page broken");
+            if (!accepted) {
+                fail_msg("coroutine returned instead of faulting - guard page broken");
+            }
         }
     }
 }
@@ -110,12 +119,14 @@ static void run_tests(void) {
     /* The overflow must be FATAL, never a silent return. Two death shapes are
        acceptable because both prove the guard page caught the write:
          - death by SIGSEGV: the PROT_NONE page faulted directly;
-         - a nonzero exit status: under an ASan-instrumented build the
-           sanitizer intercepts the same fault, reports "stack-overflow" and
-           terminates with its own exit code.
-       Only a normal exit means the guard failed. */
+         - death by SIGABRT: under an ASan-instrumented build (the
+           abort_on_error=1 convention this suite is run with) the sanitizer
+           intercepts the same fault, reports it and aborts.
+       A nonzero exit status is accepted for sanitizers that report through
+       their own exit code instead. Only a normal exit means the guard
+       failed. */
     if (WIFSIGNALED(status)) {
-        CHECK(WTERMSIG(status) == SIGSEGV);
+        CHECK(WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGABRT);
     } else if (WIFEXITED(status)) {
         CHECK(WEXITSTATUS(status) != 0);
         CHECK(!(WEXITSTATUS(status) == 2) &&

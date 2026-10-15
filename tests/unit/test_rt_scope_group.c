@@ -6,6 +6,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h> /* Sleep in the thread-side wait below */
+#endif
+
 /* L3 step 5: the group three-state family (verdict section 3.3).
  *
  *   - wait_all is the live==0 wait (already covered by the wait suite);
@@ -41,10 +45,14 @@ static coro_status quick_entry(void* arg) {
 }
 
 static void sleep_ms(unsigned ms) {
+#if defined(_WIN32)
+    Sleep(ms);
+#else
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+#endif
 }
 
 struct ferr_scene {
