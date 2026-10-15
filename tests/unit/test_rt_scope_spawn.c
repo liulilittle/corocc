@@ -10,24 +10,24 @@
 #include <windows.h> /* Sleep in the thread-side wait below */
 #endif
 
-/* L3 step 2: the cell contract (verdict section 3.5).
+/* The cell contract.
  *
  *   - the trampoline is the only writer of a child's result cell: the
  *     value read after a wait is exactly what the entry returned;
  *   - cell_out=NULL is tolerated and means "no result": the child is not
  *     aggregated (an explicit opt-out);
  *   - the aggregate is the first non-OK result in COMPLETION order, and it
- *     covers children that finished before the wait even started (D7);
+ *     covers children that finished before the wait even started;
  *   - a cancelled child reports its own final value (conventionally
- *     ECANCELED) -- the scope never pre-writes a result (D5, red-proved by
- *     injection in the step-1 suite) and there is no EBUSY sentinel (D13,
- *     likewise red-proved there).
+ *     ECANCELED) -- the scope never pre-writes a result (a second writer
+ *     would race the trampoline) and there is no EBUSY sentinel in the
+ *     cell (the child's own status is its sole content).
  *
- * The red proofs for the writer discipline itself are the step-1 negative
- * injections (cancel-as-second-writer, sentinel regression); this file
- * pins the positive contract they guard.
+ * The writer discipline itself is guarded by negative injections
+ * (cancel-as-second-writer, sentinel regression) pinned in the state suite;
+ * this file pins the positive contract they guard.
  *
- * The wait family's waiter must be a coroutine (verdict 3.1), so every
+ * The wait family's waiter must be a coroutine, so every
  * scene parks a waiter coroutine on the scope and the main thread drives
  * the runtime to quiescence with coro_rt_wait_all before asserting.
  */
@@ -156,7 +156,7 @@ static void run_tests(void) {
         CHECK(coro_rt_scope_destroy(&s) == CORO_OK);
     }
 
-    /* ---- a child that finished before the wait still aggregates (D7) --- */
+    /* ---- a child that finished before the wait still aggregates ------ */
     {
         coro_rt_scope_t s;
         struct scene sc;
@@ -201,7 +201,7 @@ static void run_tests(void) {
         /* The scope cancel (issued from the main thread while the waiter is
            parked) cuts the child's sleep; the entry propagates the
            ECANCELED, and that value -- written by the trampoline alone --
-           is what the wait aggregates. The scope wrote nothing (D5). */
+           is what the wait aggregates. The scope wrote nothing. */
         coro_rt_scope_t s;
         struct scene sc;
         coro_status* cell = NULL;

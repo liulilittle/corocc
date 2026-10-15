@@ -32,7 +32,7 @@ add_executable(test_ctx_asan unit/test_ctx_asan.c)
 target_link_libraries(test_ctx_asan PRIVATE corocc)
 add_test(NAME ctx_asan COMMAND test_ctx_asan)
 
-# M2: coroutine object (L1)
+# coroutine object (L1)
 add_executable(test_coro_smoke unit/test_coro_smoke.c)
 target_link_libraries(test_coro_smoke PRIVATE corocc)
 add_test(NAME coro_smoke COMMAND test_coro_smoke)
@@ -45,7 +45,7 @@ add_executable(test_coro_cancel unit/test_coro_cancel.c)
 target_link_libraries(test_coro_cancel PRIVATE corocc)
 add_test(NAME coro_cancel COMMAND test_coro_cancel)
 
-# M2 safety suites: exactly-once under concurrency, failure without side
+# safety suites: exactly-once under concurrency, failure without side
 # effects, the zero-spin probe (probe counter only with COROCC_PROBE_NOSPIN)
 # and a deterministic stress run.
 add_executable(test_coro_exactlyonce unit/test_coro_exactlyonce.c)
@@ -96,7 +96,7 @@ target_link_libraries(bench_switch PRIVATE corocc)
 add_executable(bench_coro perf/bench_coro.c)
 target_link_libraries(bench_coro PRIVATE corocc)
 
-# M3: the per-thread runtime as seen through the public API.
+# the per-thread runtime as seen through the public API.
 add_executable(test_thread_smoke unit/test_thread_smoke.c)
 target_link_libraries(test_thread_smoke PRIVATE corocc)
 if (NOT WIN32)
@@ -105,7 +105,7 @@ if (NOT WIN32)
 endif()
 add_test(NAME thread_smoke COMMAND test_thread_smoke)
 
-# M3: cross-thread wakeup delivered to the owning thread.
+# cross-thread wakeup delivered to the owning thread.
 add_executable(test_coro_crossresume unit/test_coro_crossresume.c)
 target_link_libraries(test_coro_crossresume PRIVATE corocc)
 if (NOT WIN32)
@@ -114,7 +114,7 @@ if (NOT WIN32)
 endif()
 add_test(NAME coro_crossresume COMMAND test_coro_crossresume)
 
-# M3 concurrency suites. Both are built on every platform now (the sources
+# concurrency suites. Both are built on every platform now (the sources
 # go through tests/palt_threads.h); the TSan-visible suite below is the one
 # exception. The TSan suite needs the internal headers, so it also gets the
 # source root on its include path.
@@ -128,7 +128,7 @@ add_test(NAME conc_double_resume COMMAND test_conc_double_resume)
 
 # Registered on POSIX only. MSVC has no ThreadSanitizer; the purpose of this
 # suite is TSan visibility, which a Win32 build cannot provide —— building it
-# there would yield false coverage. (M9 verdict item 7, verbatim.)
+# there would yield false coverage.
 if (NOT WIN32)
     find_package(Threads REQUIRED)
     add_executable(test_conc_runtime_tsan concurrency/test_conc_runtime_tsan.c)
@@ -137,13 +137,13 @@ if (NOT WIN32)
     add_test(NAME conc_runtime_tsan COMMAND test_conc_runtime_tsan)
 endif()
 
-# M4: the timer heap and the monotone clock.
+# the timer heap and the monotone clock.
 add_executable(test_timer unit/test_timer.c)
 target_include_directories(test_timer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(test_timer PRIVATE corocc)
 add_test(NAME timer COMMAND test_timer)
 
-# M4: the single-thread scheduler.
+# the single-thread scheduler.
 add_executable(test_sched_spawn unit/test_sched_spawn.c)
 target_link_libraries(test_sched_spawn PRIVATE corocc)
 add_test(NAME sched_spawn COMMAND test_sched_spawn)
@@ -157,8 +157,8 @@ add_test(NAME sched_sleep COMMAND test_sched_sleep)
     target_link_libraries(test_sched_join PRIVATE corocc)
     add_test(NAME sched_join COMMAND test_sched_join)
 
-# M:N work-stealing runtime (L2). M9: these suites build on Windows too --
-# the runtime layer uses the platform lock/condition shim, not pthreads.
+# M:N work-stealing runtime (L2). These suites build on Windows too -- the
+# runtime layer uses the platform lock/condition shim, not pthreads.
 # Threads::Threads carries -pthread on POSIX only; on MSVC FindThreads
 # yields an empty imported target (no libraries to add).
 find_package(Threads REQUIRED)
@@ -167,29 +167,28 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     target_link_libraries(test_rt_mn PRIVATE corocc Threads::Threads)
     add_test(NAME rt_mn COMMAND test_rt_mn)
 
-    # P3 sync primitives on the M:N runtime.
+    # sync primitives on the M:N runtime.
     add_executable(test_rt_sync unit/test_rt_sync.c)
     target_include_directories(test_rt_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_sync PRIVATE corocc Threads::Threads)
     add_test(NAME rt_sync COMMAND test_rt_sync)
 
-    # M5: writer-preferring read/write lock on the M:N runtime.
+    # writer-preferring read/write lock on the M:N runtime.
     add_executable(test_rt_rwlock unit/test_rt_rwlock.c)
     target_include_directories(test_rt_rwlock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_rwlock PRIVATE corocc Threads::Threads)
     add_test(NAME rt_rwlock COMMAND test_rt_rwlock)
 
-    # M5: bounded/unbounded channel on the M:N runtime.
+    # bounded/unbounded channel on the M:N runtime.
     add_executable(test_rt_channel unit/test_rt_channel.c)
     target_include_directories(test_rt_channel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_channel PRIVATE corocc Threads::Threads)
     add_test(NAME rt_channel COMMAND test_rt_channel)
 
-    # L2 hardening set: retained-handle accounting (R2), join-chain
-    # atomicity and cancel detach with a usable node afterwards (R3), and
-    # -- landing with R4 -- the exactly-once wake-request claim. The
-    # cancel-of-a-sync-chain scene (R1) is held back by the W11 verdict and
-    # moves to its own task.
+    # L2 hardening set: retained-handle accounting, join-chain atomicity
+    # and cancel detach with a usable node afterwards, and the exactly-once
+    # wake-request claim. The cancel-of-a-sync-chain scene is held back (it
+    # stays a documented caller-level limitation instead).
     add_executable(test_rt_lifecycle unit/test_rt_lifecycle.c)
     target_include_directories(test_rt_lifecycle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_lifecycle PRIVATE corocc Threads::Threads)
@@ -197,7 +196,7 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     # Concurrency suite: a lost wakeup must fail, not hang the run forever.
     set_tests_properties(rt_lifecycle PROPERTIES TIMEOUT 120)
 
-    # D23 family: a cancellation consumed at a park's safe point leaves the
+    # A cancellation consumed at a park's safe point leaves the
     # node usable -- every park site retires the park marker, so the next
     # plain yield requeues the coroutine, and a cancelled sleep takes its
     # deadline out of the timer heap (no second drive).
@@ -209,52 +208,52 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
 
     # L3 structured concurrency: the scope state machine and the per-API
     # return codes that guard it (illegal transitions, destroy idempotence,
-    # zero-init is OPEN). Step 1 of the L3 TDD sequence.
+    # zero-init is OPEN).
     add_executable(test_rt_scope_state unit/test_rt_scope_state.c)
     target_link_libraries(test_rt_scope_state PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_state COMMAND test_rt_scope_state)
     set_tests_properties(rt_scope_state PROPERTIES TIMEOUT 120)
 
-    # L3 step 2: the child result cell -- the trampoline is its only
-    # writer, cell_out=NULL means "no result", the aggregate is the first
-    # non-OK in completion order.
+    # The child result cell: the trampoline is its only writer,
+    # cell_out=NULL means "no result", the aggregate is the first non-OK in
+    # completion order.
     add_executable(test_rt_scope_spawn unit/test_rt_scope_spawn.c)
     target_link_libraries(test_rt_scope_spawn PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_spawn COMMAND test_rt_scope_spawn)
     set_tests_properties(rt_scope_spawn PROPERTIES TIMEOUT 120)
 
-    # L3 step 3: the wait predicate -- one parking point on the scope
-    # event chain, multi-waiter release with one resume each, immunity to
-    # the waiter's own cancellation, and coverage of children registered
-    # while a waiter is already parked.
+    # The wait predicate: one parking point on the scope event chain,
+    # multi-waiter release with one resume each, immunity to the waiter's
+    # own cancellation, and coverage of children registered while a waiter
+    # is already parked.
     add_executable(test_rt_scope_wait unit/test_rt_scope_wait.c)
     target_include_directories(test_rt_scope_wait PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_scope_wait PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_wait COMMAND test_rt_scope_wait)
     set_tests_properties(rt_scope_wait PROPERTIES TIMEOUT 120)
 
-    # L3 step 5: the group three-state family -- wait_all (live==0),
-    # first_error (cancel the rest at the first error, still drain, report
-    # that error promptly), first_done (report the first completion, scope
-    # stays alive: follow-up wait or cancel is mandatory).
+    # The group three-state family: wait_all (live==0), first_error (cancel
+    # the rest at the first error, still drain, report that error promptly),
+    # first_done (report the first completion, scope stays alive: follow-up
+    # wait or cancel is mandatory).
     add_executable(test_rt_scope_group unit/test_rt_scope_group.c)
     target_link_libraries(test_rt_scope_group PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_group COMMAND test_rt_scope_group)
     set_tests_properties(rt_scope_group PROPERTIES TIMEOUT 120)
 
-    # L3 step 6: wait_for with the watchdog -- fail-fast before any child
-    # registration, the timer_fired CAS claim, the deadline-priority return
-    # code, and the watchdog's cancel -> join -> collect reclaim on the
-    # early exit (it is never a child and never touches live).
+    # wait_for with the watchdog: fail-fast before any child registration,
+    # the timer_fired CAS claim, the deadline-priority return code, and the
+    # watchdog's cancel -> join -> collect reclaim on the early exit (it is
+    # never a child and never touches live).
     add_executable(test_rt_scope_wait_for unit/test_rt_scope_wait_for.c)
     target_link_libraries(test_rt_scope_wait_for PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_wait_for COMMAND test_rt_scope_wait_for)
     set_tests_properties(rt_scope_wait_for PROPERTIES TIMEOUT 120)
 
-    # L3 step 7: the non-coroutine (thread-blocking) entry -- the wait
-    # family called from a plain thread blocks on the runtime's settled
-    # condition (never EAGAIN), and the thread-side wait_for waits on its
-    # own deadline and claims the same once-only timeout.
+    # The non-coroutine (thread-blocking) entry: the wait family called
+    # from a plain thread blocks on the runtime's settled condition (never
+    # EAGAIN), and the thread-side wait_for waits on its own deadline and
+    # claims the same once-only timeout.
     add_executable(test_rt_scope_thread unit/test_rt_scope_thread.c)
     target_link_libraries(test_rt_scope_thread PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_thread COMMAND test_rt_scope_thread)
@@ -265,8 +264,8 @@ add_executable(test_coro_allocator unit/test_coro_allocator.c)
 target_link_libraries(test_coro_allocator PRIVATE corocc)
 add_test(NAME coro_allocator COMMAND test_coro_allocator)
 
-# M:N runtime benchmark (not a ctest: reports throughput). M9: built on
-# Windows too now that the timed sources are platform-portable.
+# M:N runtime benchmark (not a ctest: reports throughput). Built on Windows
+# too; the timed sources are platform-portable.
 find_package(Threads REQUIRED)
 add_executable(bench_rt_mn ../perf/bench_rt_mn.c)
 target_link_libraries(bench_rt_mn PRIVATE corocc Threads::Threads)
@@ -276,24 +275,24 @@ target_link_libraries(bench_rt_mn PRIVATE corocc Threads::Threads)
 add_executable(bench_switch_pure ../perf/bench_switch_pure.c)
 target_link_libraries(bench_switch_pure PRIVATE corocc Threads::Threads)
 
-# D25 regression probe (perf/probe_collect_race.c): the collect-vs-retire
-# window. Probabilistic red/green -- intentionally NOT a ctest target;
-# run it repeatedly (see .opencode/logs/execR/D25/ for the proof scripts).
+# Collect-vs-retire race regression probe (perf/probe_collect_race.c).
+# Probabilistic red/green -- intentionally NOT a ctest target; run it
+# repeatedly to observe convergence.
 add_executable(probe_collect_race ../perf/probe_collect_race.c)
 target_link_libraries(probe_collect_race PRIVATE corocc Threads::Threads)
 if (MSVC)
     # getenv is flagged C4996 by the UCRT under /W4 /WX; the probe only reads
-    # one environment switch (D25_SPIN).
+    # one environment switch (COLLECT_SPIN).
     target_compile_definitions(probe_collect_race PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# M10 (verdict item 1): the C++11 wrapper suites and the cpp_perf gate are
-# native-only; cross sites stay C-only (cross=34). This wraps the whole M8
-# segment below without touching any target or condition inside it.
+# The C++11 wrapper suites and the cpp_perf gate are native-only; cross
+# sites stay C-only (cross=34). This wraps the whole C++ wrapper segment
+# below without touching any target or condition inside it.
 if(NOT CMAKE_CROSSCOMPILING)
 
-# ---- M8: the C++11 wrapper suites (header-only; the C library is unchanged) ----
-# P2-2: every wrapper target pins CXX_STANDARD 11 + REQUIRED. MSVC has no
+# ---- the C++11 wrapper suites (header-only; the C library is unchanged) ----
+# Every wrapper target pins CXX_STANDARD 11 + REQUIRED. MSVC has no
 # C++11 mode; there the accepted baseline is the default /std:c++14 under
 # /W4 /WX (the header avoids post-C++11 facilities, not just post-C++11
 # flags).
@@ -326,13 +325,13 @@ set_target_properties(cpp_odr PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED O
 add_test(NAME cpp_odr COMMAND cpp_odr)
 set_tests_properties(cpp_odr PROPERTIES TIMEOUT 120)
 
-# The C++ A/B switch benchmark. P1-4: the measured gate is defined on a
+# The C++ A/B switch benchmark. The measured gate is defined on a
 # Release-like, non-ASan build; in other configurations the target is still
 # built but the ctest entry is not registered. The ctest entry runs the
-# design's LOOSE gate (--loose: >=10M round trips/s both faces, ratio >=
-# 0.85 -- a coarse-regression tripwire); the strict gate (>=20M, ratio
-# >= 0.95) stays the manual/bench-section run. RUN_SERIAL keeps the
-# measurement free of sibling-test interference.
+# loose gate (--loose: >=10M round trips/s both faces, ratio >= 0.85 -- a
+# coarse-regression tripwire); the strict gate (>=20M, ratio >= 0.95) stays
+# the manual/bench-section run. RUN_SERIAL keeps the measurement free of
+# sibling-test interference.
 add_executable(bench_cpp_switch ../perf/bench_cpp_switch.cpp)
 target_link_libraries(bench_cpp_switch PRIVATE corocc Threads::Threads)
 set_target_properties(bench_cpp_switch PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON)
@@ -343,4 +342,4 @@ if (NOT COROCC_ASAN AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR
     set_tests_properties(cpp_perf PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 endif()
 
-endif()  # NOT CMAKE_CROSSCOMPILING (M10: cross sites are C-only, cross=34)
+endif()  # NOT CMAKE_CROSSCOMPILING (cross sites are C-only, cross=34)

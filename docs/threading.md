@@ -74,7 +74,7 @@ thread-safety rules of its entry points:
 | --- | --- |
 | `coro_rt_create` | The constructing thread. |
 | `coro_rt_spawn`, `coro_rt_spawn_h` | The thread that manages the runtime; when several threads submit, serialize the submissions externally. The coroutines themselves then run on the worker pool. |
-| `coro_rt_destroy`, `coro_rt_wait_all` | The managing thread (drain before destroy; `CORO_EBUSY` while coroutines are live). |
+| `coro_rt_destroy`, `coro_rt_wait_all` | The managing thread (drain before destroy; `CORO_EBUSY` while coroutines are live). A destroy is exclusive: concurrent submissions or waits during it are a caller violation (see the stack-reuse note below). |
 | `coro_rt_collect` | Any thread, on a finished handle — including after `coro_rt_destroy` (that path touches only the coroutine handle and its node). |
 | `coro_rt_cancel` | Any thread. The request lands on the target's state word and, if the target is parked on a deadline, is handed to its worker through the wakeup path. |
 | `coro_rt_join` | A coroutine scheduled by the runtime (it parks the caller); a plain thread is answered `CORO_EAGAIN`. |
@@ -94,6 +94,31 @@ Synchronization primitives (`coro_rt_mutex`, `coro_rt_cond`, `coro_rt_sem`,
 - A parked worker is never blocked: a coroutine that has to wait parks
   inside the runtime and yields its worker, so a single-worker runtime still
   makes progress (and cannot deadlock on these primitives).
+
+### Coroutine stack reuse
+
+Finished coroutine stacks are recycled through a bounded per-runtime pool
+instead of being unmapped immediately, and a later default-size spawn can
+reuse one. Three consequences are part of the contract:
+
+- **A reused stack is not zeroed.** Within one process (one trust domain) a
+  coroutine can read back bytes a previously finished coroutine left on the
+  recycled stack whenever it reads stack memory it has not initialized
+  itself. Do not treat fresh stack memory as zeroed; initialize it, as
+  usual.
+- **Pool scope and lifetime.** Only built-in-allocator stacks whose usable
+  size is at least the default (`CORO_DEFAULT_STACK_SIZE`) are parked;
+  smaller custom stacks are released immediately. Only default-size spawns
+  draw from the pool (a parked entry may be larger than the request), and
+  retained or custom-allocator paths never enter it.
+  `COROCC_RT_STACK_CACHE_MAX` (compile-time; default 256) bounds the number
+  of parked mappings per runtime — the excess is released normally — and
+  `coro_rt_destroy` releases every stack still parked.
+- **A destroy is exclusive.** Spawning (`coro_rt_spawn`, `coro_rt_spawn_h`)
+  or waiting (`coro_rt_wait_all`) while a `coro_rt_destroy` is in progress
+  is a caller violation and must not be attempted: quiesce the submitters
+  and waiters first. Submissions from several threads are not internally
+  serialized either (see the table above).
 
 The scheduler layer is stricter by design — it is bound to the thread that
 created it; see the thread-safety table in

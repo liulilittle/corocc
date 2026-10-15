@@ -1,10 +1,10 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * src/platform/coro_plat_locks.c -- internal lock/condition shim (M9).
+ * src/platform/coro_plat_locks.c -- internal lock/condition shim.
  *
  * Thin forwards only; see coro_plat_locks.h for the contract. The Windows
- * side follows the shape verified by the M9 design probe D: SRWLOCK plus
+ * side follows the shape verified for the Windows backend: SRWLOCK plus
  * CONDITION_VARIABLE, relative-millisecond timeout conversion clamped to
  * [1, INFINITE-1], and a past deadline reported as an immediate timeout.
  * Windows timers are tick-slaved -- SleepConditionVariableSRW may fire a

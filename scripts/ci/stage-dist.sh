@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage one prebuilt distribution tree and pack corocc-<tag>-<triple>.tar.gz
-# (design v1.1 section 9.2; the workflow upload path uses the same name --
-# ci/check-workflows.sh asserts the naming chain).
+# (the workflow upload path uses the same name -- ci/check-workflows.sh
+# asserts the naming chain).
 #
 # Usage: scripts/ci/stage-dist.sh <site> <triple> <tag>
 #   <site>  build-test.sh site name; the build tree is build-ci-<site>

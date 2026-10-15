@@ -1,7 +1,7 @@
 /*
  * mips N32 context-switch backend (big/little endian, ILP32 data model on
- * 64-bit registers). Hand-written for W6, following the calling conventions
- * proven by the vendored mips32_o32 / mips64_n64 backends in this directory:
+ * 64-bit registers). Hand-written, following the calling conventions proven
+ * by the vendored mips32_o32 / mips64_n64 backends in this directory:
  *   - N32 keeps 64-bit general registers, so the s0-s7/fp/ra/gp/pc slots are
  *     8-byte wide (sd/ld), unlike the 4-byte o32 slots;
  *   - transfer_t (8 bytes) is returned in $v0/$v1, exactly like n64 - the

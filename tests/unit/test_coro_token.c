@@ -1,7 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Task 2: the credential protocol. Every suspension point
+/* The credential protocol. Every suspension point
    publishes a unique monotone token; only the holder of the live token can
    resume, a stale token is rejected, and exactly once. */
 

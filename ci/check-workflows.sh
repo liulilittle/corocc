@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Static assertions over the M10 workflows and the artefacts they reference
-# (design v1.1 section 10.2; v1.2 section 4 adds the naming-chain assertion).
+# Static assertions over the workflows and the artefacts they reference,
+# including the naming chain between the scripts and the upload paths.
 #
 # Extraction contracts (the files are ours and format-controlled; a parse that
 # stops finding rows is itself a failure -- each extractor asserts a non-empty
@@ -220,7 +220,7 @@ n_tc="$(git ls-files -- 'scripts/toolchains/*.cmake' | wc -l)"
 [ "$n_asm" -ge 8 ] || err "tracked src/arch/*.S = $n_asm (<8)"
 [ "$n_tc" -ge 18 ] || err "tracked scripts/toolchains/*.cmake = $n_tc (<18)"
 
-# ---- verdict ---------------------------------------------------------------
+# ---- summary ---------------------------------------------------------------
 if [ "$FAIL" -eq 0 ]; then
     echo "check-workflows: OK"
 else

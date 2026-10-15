@@ -1,8 +1,8 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Tasks 3-4: cancellation observed at a safe point, join without
-   a runtime layer, and coroutine-local slots that survive suspension. */
+/* Cancellation observed at a safe point, join without a runtime layer, and
+   coroutine-local slots that survive suspension. */
 
 static coro_t*  g_c;
 static unsigned g_rounds;

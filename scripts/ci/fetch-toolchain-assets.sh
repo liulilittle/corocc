@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch + verify + unpack prebuilt toolchain assets (design v1.1 section 8.2;
-# v1.2 section 2 wires this into the asset matrix rows).
+# Fetch + verify + unpack prebuilt toolchain assets (used by the asset rows
+# of the CI and release workflows; see docs/platforms.md).
 #
 # Usage: scripts/ci/fetch-toolchain-assets.sh <triple> [<triple>...]
 #

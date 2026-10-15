@@ -85,7 +85,7 @@ typedef struct coro_ctx {
 
 | 入口 | 契约 |
 | --- | --- |
-| `coro_ctx_init(cx, stk, entry, arg)` | 在活栈上构造入口帧,使首次切入时调用 `entry(arg)`。上下文借用 `stk`(栈须比上下文长寿且保持不变)。成功返回 `0`;`cx`、`stk` 或 `entry` 为 NULL 时返回非零的 `CORO_EINVAL`。**注意返回类型是普通 `int`**,不是 `coro_status`。前置:`cx` 未处于活动状态(先销毁)。失败时 `cx` 保持零值。 |
+| `coro_ctx_init(cx, stk, entry, arg)` | 在活栈上构造入口帧,使首次切入时调用 `entry(arg)`。上下文借用 `stk`(栈须比上下文长寿且保持不变)。成功返回 `0`;`cx`、`stk` 或 `entry` 为 NULL 时返回非零的 `CORO_EINVAL`。**注意返回类型是普通 `int`**,不是 `coro_status`。前置:`cx` 未处于活动状态(先销毁);`stk` 当前是否已分配同样是调用方前置条件,调用不做校验。失败时 `cx` 保持不变。 |
 | `coro_ctx_destroy(cx)` | 释放保存的帧并清零对象。幂等(NULL 被接受);不释放栈。前置:`cx` 不是当前运行上下文,且不会再被切入。 |
 | `coro_ctx_swap(from, to)` | 保存 `from` 的被调用者保存状态、恢复 `to` 的,在 `to` 中继续执行;待某上下文再切回 `from` 时,该调用"从 `from` 返回"。必须按 nothrow 编译:禁止用它跨边界传播 C++ 异常。前置:两个上下文均活动且互异;调用期间不持任何锁;同一对上下文同一时刻只由一条线程切换。 |
 

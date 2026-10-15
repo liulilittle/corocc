@@ -1,7 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* "Exactly once" under concurrency, manual mode (M2 contract, revisited).
+/* "Exactly once" under concurrency, manual mode.
  *
  * The safety property the credential protocol guarantees is mutual exclusion of
  * drives: for one credential exactly one compare-and-swap can win, so at most

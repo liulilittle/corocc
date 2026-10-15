@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local mirror of the M10 ci.yml steps that are meaningful on a Linux host
+# Local mirror of the ci.yml steps that are meaningful on a Linux host
 # (WSL included): YAML parse -> actionlint (when installed) -> shellcheck
 # (when installed) -> ci/check-workflows.sh -> the same per-site driver the
 # workflows call (scripts/ci/build-test.sh, crowdsourced floors from

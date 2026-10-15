@@ -19,7 +19,7 @@
  * comparable only after this conversion. ns/round-trip is the per-yield
  * latency; ns/context-switch is half of it.
  *
- * DISCIPLINE (pinned with the W11 audit):
+ * DISCIPLINE (pinned measurement protocol):
  *   - configuration: -O2, ncoro=8 (single worker);
  *   - 5 timed repeats; the median is the reported figure and the gate
  *     judgement (a single run at the 20M/s gate is noise: the measured

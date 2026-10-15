@@ -2,7 +2,7 @@
 #include <corocc/coro.h>
 #include <corocc/coro_rt.h>
 
-/* P3: coroutine synchronization primitives on the M:N runtime.
+/* Coroutine synchronization primitives on the M:N runtime.
  *
  * Behaviours pinned:
  *   - mutex: N coroutines race for one lock; at any time at most one is

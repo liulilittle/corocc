@@ -86,9 +86,9 @@ jobs:
       # the job when the flag is dropped. -Wno-error=tsan: gcc 13 has no
       # instrumentation for __atomic_thread_fence and flags it under
       # -Wtsan; the project's -Werror would otherwise red the build (the
-      # warning stays visible in the log). Effective flag set == the M9-era
-      # build-tsan tree's cache (-fsanitize=thread -Wno-error=tsan; the
-      # sanitizer flag itself comes from the COROCC_TSAN branch).
+      # warning stays visible in the log). Effective flag set:
+      # -fsanitize=thread -Wno-error=tsan; the sanitizer flag itself comes
+      # from the COROCC_TSAN branch.
       - run: bash scripts/ci/build-test.sh tsan --select conc_runtime_tsan -- -DCOROCC_TSAN=ON -DCMAKE_C_FLAGS=-Wno-error=tsan -DCMAKE_CXX_FLAGS=-Wno-error=tsan
 
   nospin:
@@ -142,7 +142,7 @@ jobs:
           # test set that the cross gate builds).
           - { abi: aarch64,      toolchain: scripts/toolchains/aarch64.cmake,  apt: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu", assets: "" }
           - { abi: armhf,        toolchain: scripts/toolchains/arm32.cmake,    apt: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf", assets: "" }
-          - { abi: i386,         toolchain: scripts/toolchains/i386.cmake,     apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }          # C-only ABI: the C++ suites are gated out, but 32-bit libstdc++(.a) is needed for CMake's CXX detection link (-static, audit A-1)
+          - { abi: i386,         toolchain: scripts/toolchains/i386.cmake,     apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }          # C-only ABI: the C++ suites are gated out, but 32-bit libstdc++(.a) is needed for CMake's CXX detection link (-static)
           - { abi: mips_o32,     toolchain: scripts/toolchains/mips32.cmake,   apt: "gcc-mips-linux-gnu g++-mips-linux-gnu", assets: "" }
           - { abi: mipsel_o32,   toolchain: scripts/toolchains/mips32el.cmake, apt: "gcc-mipsel-linux-gnu g++-mipsel-linux-gnu", assets: "" }
           - { abi: mips64_n64,   toolchain: scripts/toolchains/mips64.cmake,   apt: "gcc-13-mips64-linux-gnuabi64 g++-13-mips64-linux-gnuabi64", assets: "" }      # toolchain names the versioned g++-13 driver
@@ -192,8 +192,8 @@ jobs:
     # `windows-2025` label now resolves to the windows-2025-vs2026 image,
     # which only ships VS2026 -- the pinned `-G "Visual Studio 17 2022"`
     # generator then fails with `could not find any instance of Visual
-    # Studio`. The repository's Windows evidence base is VS2022 (M9 MSVC
-    # 19.44, A-2 fix verification 17.14), so this job pins `windows-2022`
+    # Studio`. The repository's Windows evidence base is VS2022 (MSVC
+    # 19.44), so this job pins `windows-2022`
     # (VS2022 17.x) to stay aligned with that evidence. VS2026 / the
     # windows-2025-vs2026 image can become a future nightly experiment
     # (default generator / newer CMake), not a gate.
@@ -205,17 +205,17 @@ jobs:
       - run: |
           cmake --build build --config Release --parallel 2
           cmake --build build --config Debug --parallel 2
-      # A-9 ruling (b): Release-only ctest. The Debug config remains a build
-      # gate above; its ctest set is disabled because three suites hang in
+      # Release-only ctest. The Debug config remains a build gate above; its
+      # ctest set is disabled because three suites hang in
       # MSVC Debug (OOM injection x Debug-STL extra allocations -> uncaught
       # bad_alloc -> terminate/abort -> ucrtbased CrtDbgReportW modal dialog;
       # the death tests' abort-expecting children hit the same dialog).
-      # Reproduced on the pre-fix tree (not caused by the M10 edits); Linux
-      # Debug and Windows Release are green and cdb stacks show no library
-      # defect. Debug ctest is tracked as an M8 hardening candidate
+      # Reproduced on earlier trees as well (not caused by the recent edits);
+      # Linux Debug and Windows Release are green and cdb stacks show no
+      # library defect. Debug ctest is tracked as a hardening candidate
       # (test-side robustness + abort-dialog suppression).
       - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
-        # NOTE (L5): this job calls cmake/ctest directly (it does not use
+        # NOTE: this job calls cmake/ctest directly (it does not use
         # build-test.sh). Under the VS multi-config generator CMAKE_BUILD_TYPE
         # is empty, so cpp_perf is never registered here; the script-level
         # -E cpp_perf applies to the other jobs.
@@ -238,7 +238,7 @@ jobs:
             -DANDROID_ABI=${{ matrix.android_abi }}
           cmake --build build-ndk -j2
 
-  # Optional, report-only: never a required check (verdict item 2).
+  # Optional, report-only: never a required check.
   perf-report:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04
@@ -251,7 +251,7 @@ jobs:
       - run: |
           cmake -S . -B build-perf -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-perf -j2
-      - name: benchmarks (report-only; outputs land in ci-logs/perf/)   # L3 fix
+      - name: benchmarks (report-only; outputs land in ci-logs/perf/)
         run: |
           mkdir -p ci-logs/perf
           { ./build-perf/tests/bench_switch

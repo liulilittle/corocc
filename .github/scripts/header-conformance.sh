@@ -46,7 +46,7 @@ run "g++   c++11" g++ -std=c++11  "$TMP/probe.cpp"
 run "g++   c++17" g++ -std=c++17  "$TMP/probe.cpp"
 run "clang++ c++11" clang++ -std=c++11 "$TMP/probe.cpp"
 
-# ---- M8: the C++11 wrapper header (coro.hpp) ----
+# ---- the C++11 wrapper header (coro.hpp) ----
 # Strict C++11 for the wrapper itself, the forward standards (14/17/20 must
 # compile clean: new-standard deprecation warnings are failures), the
 # degraded modes (-fno-exceptions/-fno-rtti) and both include orders (the C

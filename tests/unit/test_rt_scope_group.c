@@ -10,7 +10,7 @@
 #include <windows.h> /* Sleep in the thread-side wait below */
 #endif
 
-/* L3 step 5: the group three-state family (verdict section 3.3).
+/* The group three-state family.
  *
  *   - wait_all is the live==0 wait (already covered by the wait suite);
  *   - wait_first_error returns at the first non-OK result, cancels the
@@ -171,7 +171,7 @@ static void run_tests(void) {
         CHECK(sc.first == CORO_ESTALE);         /* the first completion */
         CHECK(sc.elapsed_ns < 300000000ull);
         /* No follow-up yet: the scope is still live -- destroy detects it
-           instead of hanging or leaking silently (verdict 3.3). */
+           instead of hanging or leaking silently. */
         CHECK(coro_rt_scope_destroy(&s) == CORO_EBUSY);
         /* the required follow-up: cancel the rest and drain */
         CHECK(coro_rt_scope_cancel(rt, &s) == CORO_OK);

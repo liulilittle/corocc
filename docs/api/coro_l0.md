@@ -97,7 +97,7 @@ typedef struct coro_ctx {
 
 | Entry point | Contract |
 | --- | --- |
-| `coro_ctx_init(cx, stk, entry, arg)` | Build the entry frame on a live stack so the first swap into it calls `entry(arg)`. The context borrows `stk` (the stack must outlive the context and stay unchanged). Returns `0` on success and the non-zero `CORO_EINVAL` when `cx`, `stk` or `entry` is NULL. **Note the return type: a plain `int`**, not `coro_status`. Precondition: `cx` is not already live (destroy it first). On failure `cx` is left zeroed. |
+| `coro_ctx_init(cx, stk, entry, arg)` | Build the entry frame on a live stack so the first swap into it calls `entry(arg)`. The context borrows `stk` (the stack must outlive the context and stay unchanged). Returns `0` on success and the non-zero `CORO_EINVAL` when `cx`, `stk` or `entry` is NULL. **Note the return type: a plain `int`**, not `coro_status`. Precondition: `cx` is not already live (destroy it first); whether `stk` is currently allocated is likewise a caller precondition, not validated by the call. On failure `cx` is left untouched. |
 | `coro_ctx_destroy(cx)` | Release the saved frame and zero the object. Idempotent (NULL accepted); does not free the stack. Precondition: `cx` is not the running context and will not be swapped into again. |
 | `coro_ctx_swap(from, to)` | Save the callee-saved state of `from`, restore that of `to`, resume in `to`. Returns "in `from`" the next time some context swaps back. Compile it as nothrow: it must not propagate C++ exceptions across the boundary. Preconditions: both contexts are live and distinct; no lock is held across the call; one thread at a time swaps a given pair. |
 

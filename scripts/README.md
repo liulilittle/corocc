@@ -41,8 +41,9 @@ scripts/prebuild-all.sh
 
 `ci/build-test.sh` writes `<site>-{configure,build,ctest}.log` and a
 `<site>-versions.txt` toolchain record under `$LOG_DIR` (default
-`ci-logs/<site>/`). `build-all.sh` writes its per-ABI logs under
-`$LOG_DIR/ci/` (default: a repository-local, untracked log directory); set
+`ci-logs/<site>/`). `build-all.sh` sets `$LOG_DIR` itself (default
+`<repo>/ci-logs`, a repository-local, untracked log directory) and passes it
+to the driver, so its per-ABI logs land flat as `ci-logs/<site>-*.log`; set
 `LOG_DIR` to choose the base directory.
 
 ## `ci/build-test.sh` presets (`--matrix-env`)

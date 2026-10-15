@@ -3,9 +3,9 @@
  *
  * tests/cpp/test_cpp_runtime.cpp -- the L2 runtime face: runtime RAII and
  * drain, detached spawn, typed task<R> (value / void / coro_status), the
- * thread-side target-directed wait (P1-3), cancel, the detached-exception
- * handler, the metadata-OOM versus user-construction-exception split
- * (P2-6), move semantics and multi-worker stress.
+ * thread-side target-directed wait, cancel, the detached-exception handler,
+ * the metadata-OOM versus user-construction-exception split, move semantics
+ * and multi-worker stress.
  */
 #include "../harness.h"
 
@@ -19,7 +19,7 @@
 #include <string>
 #include <thread>
 
-/* ---- allocation failure injection (wrapper metadata OOM, P2-6) ----
+/* ---- allocation failure injection (wrapper metadata OOM) ----
  *
  * The wrapper's own metadata (the shared state, the control block, the name
  * copy) is allocated with operator new. Replacing the global operator new in
@@ -191,7 +191,7 @@ static void test_task_value(void) {
     CHECK(t.valid());
     CHECK(t.native() != NULL);
 
-    /* Thread-side wait: target-directed collect retry (P1-3); the target is
+    /* Thread-side wait: target-directed collect retry; the target is
      * quick, so the retry rides its retirement out promptly. */
     CHECK(t.wait().ok());
     CHECK(t.done());
@@ -381,9 +381,8 @@ static void test_multi_worker(void) {
     CHECK(rt.pending() == 0u);
 }
 
-/* ---- F-1 pin (audited fix): wait() on the calling coroutine's own handle
- * is the self-join and reports EAGAIN (design §5.5), never the thread-side
- * EBUSY retry exhaustion. */
+/* ---- wait() on the calling coroutine's own handle is the self-join and
+ * reports EAGAIN, never the thread-side EBUSY retry exhaustion. */
 static void test_wait_self_join_eagain(void) {
     corocc::runtime rt(2);
     std::atomic<int> self_code(-999);
@@ -403,10 +402,9 @@ static void test_wait_self_join_eagain(void) {
     CHECK(t.done());
 }
 
-/* ---- F-2 pins (audit ruling ii): a std::bad_alloc thrown while the
- * wrapper moves/stores the user's callable or arguments normalises to
- * CORO_ENOMEM (hop1); other exceptions and the call-site hop (hop0) keep
- * propagating. */
+/* ---- A std::bad_alloc thrown while the wrapper moves/stores the user's
+ * callable or arguments normalises to CORO_ENOMEM (hop1); other exceptions
+ * and the call-site hop (hop0) keep propagating. */
 struct ba_move_functor {
     int hops;
     int throw_at;
@@ -506,7 +504,7 @@ static void test_bad_alloc_move_normalised(void) {
         CHECK(caught);
     }
 
-    /* Control: a hop2 bad_alloc still normalises (box_new, P2-6). */
+    /* Control: a hop2 bad_alloc still normalises (box_new). */
     {
         ba_move_functor m(2, 0);
         corocc::status st = rt.spawn(m);

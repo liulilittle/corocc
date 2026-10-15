@@ -1,7 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro_sched.h>
 
-/* Milestone M4 Task 2: the run loop and spawn.
+/* The run loop and spawn.
  *
  * What the loop must guarantee: coroutines run to their next park, a parked
  * coroutine is resumed on a later turn, spawn does not run anything inline,

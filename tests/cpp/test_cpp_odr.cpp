@@ -1,7 +1,7 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * tests/cpp/test_cpp_odr.cpp -- the two-TU ODR pin (A7 pin 2 / P2-2). This
+ * tests/cpp/test_cpp_odr.cpp -- the two-TU ODR pin. This
  * TU includes coro.hpp before the C headers; its partner
  * test_cpp_odr_b.cpp includes the C headers first and coro.hpp second. The
  * two translation units are linked into one binary, so the header's single

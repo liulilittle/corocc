@@ -17,8 +17,8 @@
  * across calls within a function (e.g. the stack-protector canary check).
  * A context resumed on a different thread would then use a stale TLS
  * pointer. The s390x builds therefore compile the library and tests with
- * -fno-stack-protector (see scripts/toolchains/s390x.cmake); see the P11
- * report for the full analysis.
+ * -fno-stack-protector (see scripts/toolchains/s390x.cmake and
+ * docs/threading.md for the full analysis).
  */
 
 /* --- begin make_s390x_sysv_elf_gas.S (renamed corocc_asm_make) --- */

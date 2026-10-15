@@ -1,7 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Task 5, part 3: zero spin.
+/* Zero spin.
  *
  * The control path (start/resume/yield) must perform a fixed, small number of
  * compare-and-swap attempts -- never a retry loop, never a busy wait. The

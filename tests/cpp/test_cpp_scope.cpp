@@ -173,7 +173,7 @@ static void test_aggregate_first_non_ok(void) {
 }
 
 static void test_first_error_timeliness_pin(void) {
-    /* Pin 1 (A7/P1-1): a void child that throws must drive
+    /* Pin 1: a void child that throws must drive
      * wait_first_error's early exit and cancel the long sleeper. With the
      * cell_out=NULL or code=OK regression this degrades to the full 2 s
      * sleep, so the elapsed bound is the anchor. */
@@ -385,7 +385,7 @@ static void test_metadata_oom(void) {
 }
 
 static void test_chrono_conversion_boundaries(void) {
-    /* The ceil/clamp/saturation rules (design v1.1 #6): negative and zero
+    /* The ceil/clamp/saturation rules: negative and zero
      * clamp to 0 (the C check-once deadline), sub-unit requests ceil to the
      * next unit, huge requests saturate instead of wrapping. */
     using corocc::detail::duration_to_ms_ceil;
@@ -427,9 +427,8 @@ static void test_chrono_conversion_boundaries(void) {
     CHECK(s3.destroy().ok());
 }
 
-/* ---- F-2 pin (audit ruling ii, scope typed face): a std::bad_alloc
- * thrown while the wrapper stores the user's callable normalises to
- * CORO_ENOMEM and the target cell stays untouched. */
+/* ---- A std::bad_alloc thrown while the wrapper stores the user's callable
+ * normalises to CORO_ENOMEM and the target cell stays untouched. */
 struct sc_ba_move_functor {
     int hops;
     sc_ba_move_functor() : hops(0) {}

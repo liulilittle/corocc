@@ -1,8 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M3 Task 1: the per-thread runtime, observed through the public
- * API.
+/* The per-thread runtime, observed through the public API.
  *
  * The coroutine layer keeps one runtime per thread (its driver context, the
  * coroutine running on it and its identity). The observable consequence is

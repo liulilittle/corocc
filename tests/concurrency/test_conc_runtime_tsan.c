@@ -2,14 +2,13 @@
 #include "coroutine/coro_runtime.h"
 #include "platform/threads.h"
 
-/* Milestone M3 Task 4, part 2: the runtime's own concurrency, under
- * ThreadSanitizer.
+/* The runtime's own concurrency, under ThreadSanitizer.
  *
  * ThreadSanitizer cannot follow a stack switch performed by assembly, so the
  * drive path itself is not instrumentable; the parts that CAN race -- the
  * delivery queue, the identity registry and the atomic helpers -- live in the
  * runtime and are exercised here without any context switch. This is the
- * TSan-visible half of the milestone's concurrency work.
+ * TSan-visible half of the runtime's concurrency work.
  *
  * What is checked: many threads append deliveries to one owner's queue and
  * read the registry while other threads create and destroy runtimes, and the

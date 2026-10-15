@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-/* Milestone M4 Task 1: the monotone clock and the timer heap.
+/* The monotone clock and the timer heap.
  *
  * The run loop leans on two properties: time never goes backwards, and the
  * soonest deadline is always at the top. Removal is the interesting case --

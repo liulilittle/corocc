@@ -1,7 +1,7 @@
 #include "../harness.h"
 #include <corocc/coro_sched.h>
 
-/* Milestone M4 Task 3: scheduled sleep and timer wakeups.
+/* Scheduled sleep and timer wakeups.
  *
  * What must hold: a sleeping coroutine is off the run queue, it is requeued by
  * the timer path (never switched to directly), nothing is lost however many

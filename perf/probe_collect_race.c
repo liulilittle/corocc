@@ -1,13 +1,14 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * perf/probe_collect_race.c -- D25 regression probe (NOT a ctest target).
+ * perf/probe_collect_race.c -- collect-vs-retire race regression probe
+ * (NOT a ctest target).
  *
- * Red/green proof of the collect-vs-retire window (D25): coro_rt_collect
- * must gate on RT_DONE (set by the retire under act_lock), never on the
- * coroutine's own DEAD state alone -- the settle publishes DEAD before the
- * worker retires the node, and freeing in that window made retire_node
- * touch freed memory (ASan heap-use-after-free).
+ * Red/green proof of the collect-vs-retire window: coro_rt_collect must gate
+ * on RT_DONE (set by the retire under act_lock), never on the coroutine's
+ * own DEAD state alone -- the settle publishes DEAD before the worker retires
+ * the node, and freeing in that window made retire_node touch freed memory
+ * (ASan heap-use-after-free).
  *
  * This probe maximizes the window hit rate: a single worker, an immediately
  * returning child, and a busy poll for DEAD followed by collect. On the
@@ -16,11 +17,12 @@
  * documented EBUSY retry for the rare finished-but-not-yet-retired round.
  *
  *   usage: probe_collect_race [rounds]   (default 2000)
- *   env:   D25_SPIN=1 -> collect retries with no back-off (maximum pressure)
+ *   env:   COLLECT_SPIN=1 -> collect retries with no back-off (maximum
+ *                            pressure)
  *
  * It is intentionally NOT registered as a ctest: the red signal is
- * probabilistic, so a single run is neither red nor green evidence -- use
- * repeated runs (see .opencode/logs/execR/D25/ for the proof scripts).
+ * probabilistic, so a single run is neither red nor green evidence -- run it
+ * repeatedly (the scripts under tests/CMakeLists.txt describe the driver).
  */
 #define _POSIX_C_SOURCE 200112L
 #include <corocc/coro.h>
@@ -37,7 +39,7 @@
 static void quick(void* arg) { (void)arg; }
 
 static void nap_us(unsigned us) {
-    if (getenv("D25_SPIN")) return;   /* maximum collect pressure mode */
+    if (getenv("COLLECT_SPIN")) return;   /* maximum collect pressure mode */
 #if defined(_WIN32)
     /* Windows timer granularity is milliseconds; round the microsecond
        request up so a real (never busy) sleep is taken. */

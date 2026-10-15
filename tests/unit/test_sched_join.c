@@ -4,7 +4,7 @@
 
 #include <string.h>
 
-/* Milestone M4 Task 4: blocking join and wait chains.
+/* Blocking join and wait chains.
  *
  * What must hold: joining a live target parks the caller and returns only when
  * the target ends; several waiters on one target are all released and each is

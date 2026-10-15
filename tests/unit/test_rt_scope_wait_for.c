@@ -6,7 +6,7 @@
 #include <string.h>
 #include <time.h>
 
-/* L3 step 6: wait_for and its watchdog (verdict section 3.2).
+/* wait_for and its watchdog.
  *
  *   - the watchdog is a retained spawn with an explicit small stack; it
  *     never enters the scope's child table and never touches the scope's

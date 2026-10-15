@@ -7,8 +7,7 @@
 # thread would then dereference the TLS slot of the thread that suspended it
 # (and crash once that thread is gone).  Disabling the canary removes that
 # compiler-generated TLS-pointer cache from the switch path; the full
-# analysis is in .opencode/logs/isa/P11-recon.md and the s390x backend
-# header note.
+# analysis is in docs/threading.md and the s390x backend header note.
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR s390x)
 set(COROCC_ABI s390x)                        # authoritative backend selector

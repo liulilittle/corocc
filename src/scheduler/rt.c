@@ -452,7 +452,7 @@ coro_status coro_rt_collect(coro_rt_t* rt, coro_t* c) {
     if (!rt || !c) return CORO_EINVAL;
     rt_node* n = (rt_node*)coro_get_sched_tag(c);
     if (!n) return CORO_EINVAL;
-    /* V4 form: the reclaim gate is an ACQUIRE load of RT_DONE. The retire
+    /* The reclaim gate is an ACQUIRE load of RT_DONE. The retire
        published that bit with a RELEASE fetch_or as its LAST write to the
        node (inside act_lock, after the chain detach), so the acquire here
        is what makes the retire's earlier writes visible -- aarch64
@@ -460,9 +460,9 @@ coro_status coro_rt_collect(coro_rt_t* rt, coro_t* c) {
        after coro_rt_destroy (a contract the public header keeps) has no
        freed-runtime dereference: only the coroutine handle and its node are
        read. The coroutine's own DEAD state is deliberately NOT a gate: the
-       settle publishes it before the worker has retired the node, and
-       freeing then raced the retire's own access to the node (D25, a
-       use-after-free). A coroutine that finished but whose retirement has
+        settle publishes it before the worker has retired the node, and
+        freeing then raced the retire's own access to the node (a
+        use-after-free). A coroutine that finished but whose retirement has
        not run (yet) therefore reports EBUSY; the caller retries -- from
        inside a coroutine, by yielding first, never by spinning -- and the
        retire completes promptly. */
@@ -545,7 +545,7 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
            chain, so neither holds. (Same shape as sched_join's wait-flag
            clear in sched.c.) */
         node_clear(self, RT_PARKED);
-        /* B-2' retry: the target may have finished while the cancellation
+        /* Retry: the target may have finished while the cancellation
            was in flight (it only ever surfaces here, at the safe point).
            The wait condition is then satisfied, so the join reports the
            outcome instead of the cancellation. */

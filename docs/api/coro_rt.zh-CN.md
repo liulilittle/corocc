@@ -23,16 +23,16 @@ coro_rt_destroy(rt);
 | 入口 | 契约 |
 | --- | --- |
 | `coro_rt_create(nthreads)` | 用 `nthreads` 个 OS worker 线程创建运行时(0 选硬件线程数,有上限;失败返回 NULL)。 |
-| `coro_rt_spawn(rt, attr, fn, arg)` | 创建协程并排队;它在稍后某个 worker 上开始,不在本次调用内运行。结束时运行时回收全部资源(句柄、栈、记账),调用方无需清理。`CORO_OK` / `CORO_EINVAL` / `CORO_ENOMEM`。 |
+| `coro_rt_spawn(rt, attr, fn, arg)` | 创建协程并排队;它在稍后某个 worker 上开始,不在本次调用内运行。结束时运行时回收全部资源(句柄、栈、记账),调用方无需清理。`CORO_OK` / `CORO_EINVAL` / `CORO_ENOMEM`。同一运行时的提交不在内部串行化:多线程提交需在外部自行串行化;复用自运行时池的栈不保证零初始化([threading.zh-CN.md](../threading.zh-CN.md))。 |
 | `coro_rt_spawn_h(rt, attr, fn, arg, &out)` | 同上,另返回句柄以便手动管理该协程(查询、取消、join)。结束后用 `coro_rt_collect`(或 `coro_destroy`)释放。 |
-| `coro_rt_collect(rt, c)` | 回收受管 spawn:释放句柄、栈与记账。每个 `coro_rt_spawn_h` 恰好一次,如同手动协程的 `coro_destroy`。协程仍存活**或已结束但尚未 retire** 时返回 `CORO_EBUSY`——重试(在协程内先 yield;绝不空转)。可在 `coro_rt_destroy` 之后调用(该路径不触碰运行时)。 |
+| `coro_rt_collect(rt, c)` | 回收受管 spawn:释放句柄、栈与记账。每个 `coro_rt_spawn_h` 恰好一次,如同手动协程的 `coro_destroy`。协程仍存活**或已结束但尚未 retire** 时返回 `CORO_EBUSY`——重试(在协程内先 yield;绝不空转)。可在 `coro_rt_destroy` 之后调用(该路径不触碰运行时)。默认分配器的栈会回到运行时上界受限的复用池而不是解除映射(自定义分配器句柄经其分配器释放)。 |
 | `coro_rt_wait_all(rt)` | 运行时自身的排空:worker 持续调度,直到无可运行项、无待发定时器、无中途协程。停在永远等不到的唤醒上的协程会像阻塞 join 一样让运行时保持存活。 |
 | `coro_rt_join(rt, c)` | 把**调用它的运行时协程**停放至目标结束;一个目标上的多个等待者全部被释放,各自恰好恢复一次。普通线程或 join 自身句柄返回 `CORO_EAGAIN`;目标已结束(无论句柄是否已回收)返回 `CORO_EDESTROYED`;等待被取消且目标未结束返回 `CORO_ECANCELED`。 |
 | `coro_rt_pending(rt)` | 存活协程数(可运行 + 睡眠 + 阻塞,未结束)。为 0 表示运行时空闲、可以安全销毁。 |
 | `coro_rt_sleep(rt, deadline)` | 把运行中的协程停放至绝对单调时间 `deadline`(传入 `now + delta`)。取消提前唤醒时返回 `CORO_ECANCELED`;协程外调用返回 `CORO_ESTALE`。 |
 | `coro_rt_yield(void)` | 主动让出 CPU:协程回到可运行集合的尾部,稍后被再次调度。协作式轮转。协程外调用返回 `CORO_ESTALE`。 |
 | `coro_rt_cancel(rt, c)` | 请求协程在下一安全点停止;睡眠中的协程会被移除期限并重新入队,使安全点立即到来。请求绝不强制切换。任意线程安全。 |
-| `coro_rt_destroy(rt)` | 停止全部 worker 并释放运行时。仍有提交未结束的协程时返回 `CORO_EBUSY`;先跑 `coro_rt_wait_all`。仅由未回收的 `coro_rt_spawn_h` 句柄保活的协程不阻止销毁。成功销毁后运行时句柄失效。 |
+| `coro_rt_destroy(rt)` | 停止全部 worker 并释放运行时。仍有提交未结束的协程时返回 `CORO_EBUSY`;先跑 `coro_rt_wait_all`。仅由未回收的 `coro_rt_spawn_h` 句柄保活的协程不阻止销毁。成功销毁后运行时句柄失效。destroy 具有排他性:并发调用 `coro_rt_spawn`/`coro_rt_spawn_h` 或 `coro_rt_wait_all` 属调用方违规;destroy 会释放复用池仍驻留的全部栈。 |
 
 身份在调度中保持:spawn 到运行时的协程仍可经其 `coro_t` 句柄查询、取消或
 join;凭证规则同样适用(至多一条执行流位于协程内),过期 resume 一律拒绝、

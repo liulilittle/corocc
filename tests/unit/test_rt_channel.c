@@ -4,7 +4,7 @@
 #include <corocc/coro_rt.h>
 #include <string.h>
 
-/* M5 T3: coro_rt_channel -- a bounded or unbounded FIFO of void* between
+/* coro_rt_channel -- a bounded or unbounded FIFO of void* between
  * runtime coroutines.
  *
  * Behaviours pinned:
@@ -318,7 +318,7 @@ static void run_close(void) {
     }
 }
 
-/* ---- cancel: no lost slot, no phantom waiter (B-2' / donate) ---------- */
+/* ---- cancel: no lost slot, no phantom waiter (donate) ----------------- */
 
 static coro_rt_channel_t g_cx;
 static coro_t*         g_cx_victim;

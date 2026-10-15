@@ -6,11 +6,11 @@ option(COROCC_ASAN "Build with AddressSanitizer (fiber-switch hooks)" OFF)
 option(COROCC_TSAN "Build with ThreadSanitizer (data races in the runtime)" OFF)
 option(COROCC_PROBE_NOSPIN "Count compare-and-swap attempts so the zero-spin
 contract can be asserted" OFF)
-# Link-time code generation (MSVC /GL + /LTCG) for Release builds. The M9
-# performance gate was measured with it (the design's ladder, section 4) and
-# the gate configuration must be the delivery configuration: a Release build
-# that ships without it is measurably slower (pure-switch gate: ~8M vs ~20M
-# round trips/s). Turn OFF for a plain /O2 build.
+# Link-time code generation (MSVC /GL + /LTCG) for Release builds. The
+# performance gate was measured with it, and the gate configuration must be
+# the delivery configuration: a Release build that ships without it is
+# measurably slower (pure-switch gate: ~8M vs ~20M round trips/s). Turn OFF
+# for a plain /O2 build.
 option(COROCC_LTCG "Enable link-time code generation in Release builds (MSVC /GL)" ON)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -18,8 +18,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Zero-warning policy for ALL our C/C++ code (library and tests). The options
 # are attached per language so they never reach the assemblers: ml64 rejects
 # /W4 /WX /utf-8, and under the Visual Studio generator the directory-level
-# options used to leak into the ASM_MASM build customization (MSB3721,
-# audit A-2); the vendored Boost asm is unaffected (C options).
+# options used to leak into the ASM_MASM build customization (MSB3721); the
+# vendored Boost asm is unaffected (C options).
 if (MSVC)
     # /utf-8: sources are stored as UTF-8 (some comments non-ASCII); without
     # it the compiler reads them in the system code page and warns C4819,
@@ -80,8 +80,8 @@ if (MSVC)
     # coro_status.h maps COROCC_API to __declspec(dllimport) unless
     # COROCC_BUILDING is defined; the static corocc target must define it for
     # itself and for consumers linking it, or every call site resolves to
-    # __imp_* and linking fails with LNK2019 (M9 probe A2). The public header
-    # stays unchanged; this is the static-library spelling of its contract.
+    # __imp_* and linking fails with LNK2019. The public header stays
+    # unchanged; this is the static-library spelling of its contract.
     target_compile_definitions(corocc PUBLIC COROCC_BUILDING=1)
 endif()
 if (NOT MSVC)

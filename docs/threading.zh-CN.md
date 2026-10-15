@@ -61,7 +61,7 @@ coro_status s = coro_resume(worker, tok, &next);   /* 一次认领,一次驱动 
 | --- | --- |
 | `coro_rt_create` | 构造它的线程。 |
 | `coro_rt_spawn`、`coro_rt_spawn_h` | 管理运行时的线程;多线程提交时由调用方在外部串行化。提交后协程在 worker 池上运行。 |
-| `coro_rt_destroy`、`coro_rt_wait_all` | 管理线程(先排空再销毁;有存活协程时报 `CORO_EBUSY`)。 |
+| `coro_rt_destroy`、`coro_rt_wait_all` | 管理线程(先排空再销毁;有存活协程时报 `CORO_EBUSY`)。destroy 具有排他性:进行期间并发提交或等待属调用方违规(见下方栈复用说明)。 |
 | `coro_rt_collect` | 任意线程,针对已完成句柄——包括在 `coro_rt_destroy` 之后(该路径只触碰协程句柄与其记账节点)。 |
 | `coro_rt_cancel` | 任意线程。请求落在目标的状态字上;若目标停在期限上,则经唤醒路径交给它的 worker。 |
 | `coro_rt_join` | 本运行时调度的协程内部(停放调用者);普通线程得到 `CORO_EAGAIN`。 |
@@ -80,6 +80,25 @@ coro_status s = coro_resume(worker, tok, &next);   /* 一次认领,一次驱动 
   可从任意线程调用。
 - worker 永不被阻塞:需要等待的协程在运行时内停放并让出 worker,因此单
   worker 运行时依然前进(也不会在这些原语上死锁)。
+
+### 协程栈复用
+
+已结束协程的栈不会立刻解除映射,而是经每运行时一个上界受限的池回收,之后的
+默认尺寸 spawn 可以复用其一。三条后果属于契约的一部分:
+
+- **复用栈不保证零初始化。** 同一进程(同一信任域)内,协程读取自己未初始化
+  过的栈内存时,可能读回上一个已结束协程留在回收栈上的字节。不要把新栈内存
+  当成零;照常先初始化。
+- **池的范围与寿命。** 只有内置分配器、可用尺寸不小于默认值
+  (`CORO_DEFAULT_STACK_SIZE`)的栈会被驻留;更小的自定义栈立即释放。只有默认
+  尺寸的 spawn 会从池中取用(驻留项可能大于请求尺寸);retained 与自定义
+  分配器路径绝不进入该池。`COROCC_RT_STACK_CACHE_MAX`(编译期;默认 256)限定
+  每个运行时驻留映射的数量——超出部分正常释放——`coro_rt_destroy` 释放仍然
+  驻留的全部栈。
+- **destroy 具有排他性。** 在 `coro_rt_destroy` 进行期间调用 spawn
+  (`coro_rt_spawn`、`coro_rt_spawn_h`)或 wait(`coro_rt_wait_all`)属调用方
+  违规,禁止使用:必须先把提交方与等待方静默下来。多线程提交同样不在内部
+  串行化(见上表)。
 
 调度器层按设计更严格——它绑定到创建它的线程;线程安全表见
 [coro_sched.zh-CN.md](api/coro_sched.zh-CN.md)。

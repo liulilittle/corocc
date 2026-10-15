@@ -5,7 +5,7 @@
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
  * tests/palt_threads.h -- a thin thread-compatibility layer for the
- * concurrency suites (M9 W3).
+ * concurrency suites.
  *
  * The concurrency suites were written against pthreads, which does not exist
  * on Windows. This layer gives them one vocabulary to write against:

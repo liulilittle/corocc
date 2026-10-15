@@ -10,7 +10,7 @@
  * wait returns only when the scope's live count reached zero, so no child
  * outlives the wait that covers it.
  *
- * Design contract (W11 dual-audit verdict v1.8, section 3), the short form:
+ * Design contract, the short form:
  *
  *   - one lock: every scope state transition runs under the runtime's
  *     activity lock (the same lock the sync primitives use); the state word
@@ -18,8 +18,8 @@
  *   - one parking point: a waiter parks on the scope's own event chain, at
  *     most one chain at a time, and is woken exactly once per park;
  *   - the trampoline is the only writer of a child's result cell: the scope
- *     never pre-writes a result (that race is defect D5), and a cancel is a
- *     request to the child, not a result;
+ *     never pre-writes a result (a second writer would race the trampoline),
+ *     and a cancel is a request to the child, not a result;
  *   - collect's gate is retirement (RT_DONE): a child that finished but has
  *     not been retired yet reports CORO_EBUSY, and the scope's finish paths
  *     retry with a yield in between, never by spinning;
@@ -134,7 +134,7 @@ COROCC_API coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
  * CORO_ECANCELED), and the aggregation reads that value, so there is no
  * second writer and no overwritten result.
  *
- * Caller responsibility (C-documentary limitation, verdict section 3.4):
+ * Caller responsibility:
  * cancel only interrupts children that are running or sleeping right away.
  * A child blocked inside a synchronization primitive observes the request
  * only when the event it waits for happens; and if children wait on each
@@ -150,7 +150,7 @@ COROCC_API coro_status coro_rt_scope_cancel(coro_rt_t* rt, coro_rt_scope_t* s);
 /**
  * coro_rt_scope_wait -- wait until every child of this scope has finished.
  *
- * Two entries, both documented (verdict section 3.7):
+ * Two entries, both documented:
  *
  *   - from a coroutine scheduled by this runtime the waiter parks on the
  *     scope's event chain and yields, so the runtime keeps making

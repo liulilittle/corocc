@@ -10,16 +10,16 @@
 #include <windows.h> /* Sleep in the thread-side wait below */
 #endif
 
-/* L3 step 1: the scope state machine (verdict §3.8) and the per-API return
- * codes that guard it (verdict §3.9). Every illegal transition is pinned:
+/* The scope state machine and the per-API return codes that guard it.
+ * Every illegal transition is pinned:
  *
  *   - CANCELING/DRAINED 后 spawn  -> CORO_ESTATE (state unchanged);
  *   - DESTROYED 后任何操作        -> CORO_ESTALE (destroy itself stays
  *                                    idempotent: CORO_OK, the one exception
- *                                    the verdict states twice);
+ *                                    stated twice);
  *   - live > 0 时 destroy         -> CORO_EBUSY, scope stays usable;
- *   - 零初始化                    -> OPEN (a zeroed scope accepts a spawn,
- *                                    the D11 sentinel detection is retired);
+ *   - 零初始化                    -> OPEN (a zeroed scope accepts a spawn;
+ *                                    no sentinel detection is needed);
  *   - 二次 destroy                -> CORO_OK (idempotent).
  *
  * The scope is created with no children for most scenes; the one scene that
@@ -92,7 +92,7 @@ static void run_tests(void) {
         CHECK(coro_rt_scope_cancel_requested(&s) == 0);
     }
 
-    /* ---- zero-initialized is OPEN (D11: no sentinel detection) -------- */
+    /* ---- zero-initialized is OPEN (no sentinel detection) ------------ */
     {
         coro_rt_scope_t s;
         memset(&s, 0, sizeof s);
@@ -166,7 +166,7 @@ static void run_tests(void) {
         CHECK(coro_rt_scope_destroy(&s) == CORO_OK);
     }
 
-    /* ---- cancel does not write a result cell (D5) ---------------------- */
+    /* ---- cancel does not write a result cell -------------------------- */
     {
         coro_rt_scope_t s;
         coro_status* cell = NULL;
@@ -177,14 +177,14 @@ static void run_tests(void) {
         sleep_ms(50);   /* the child finished; the trampoline wrote OK */
         /* A cancel that lands after the fact must not touch the cell: the
            trampoline is the only writer, and a second writer would clobber
-           the child's own result (D5). */
+           the child's own result. */
         CHECK(coro_rt_scope_cancel(rt, &s) == CORO_OK);
         CHECK(coro_rt_scope_wait(rt, &s) == CORO_OK);
         CHECK(*cell == CORO_OK);
         CHECK(coro_rt_scope_destroy(&s) == CORO_OK);
     }
 
-    /* ---- a child may legitimately report CORO_EBUSY (D13) -------------- */
+    /* ---- a child may legitimately report CORO_EBUSY -------------------- */
     {
         /* No EBUSY sentinel: a child's own CORO_EBUSY result is its result,
            not the mark of an unwritten cell (the retired sentinel scheme

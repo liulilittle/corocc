@@ -1,9 +1,9 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Task 1: the coroutine object skeleton -- create, destroy and
-   state query. Credentials (start/resume/yield) land with Task 2; this test
-   pins the lifetime and error contracts they must preserve. */
+/* The coroutine object skeleton -- create, destroy and state query. This
+   test pins the lifetime and error contracts the credential API
+   (start/resume/yield) must preserve. */
 
 static int g_ran = 0;
 

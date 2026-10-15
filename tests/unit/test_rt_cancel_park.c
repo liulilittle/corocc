@@ -10,8 +10,8 @@
 #include <windows.h> /* Sleep in the thread-side wait below */
 #endif
 
-/* D23 family (W11 dual-audit v1.2): a cancellation consumed at a park's
- * safe point -- the yield never switches out -- must leave the node usable.
+/* A cancellation consumed at a park's safe point -- the yield never switches
+ * out -- must leave the node usable.
  * Every park site retires RT_WAITING and RT_PARKED in its cancel branch, so
  * the coroutine's next plain yield requeues it normally. Without the marker
  * clear the driver mistakes the node for a parked one at its next settle,
@@ -218,7 +218,7 @@ static void cp_recv_controller(void* pv) {
  *       would strand the single worker, hence coro_rt_sleep.)
  *   (c) the victim that RETURNS right after the cancelled sleep: pre-fix
  *       the heap entry then drives the already-freed node (ASan
- *       heap-use-after-free) -- the red proof proper.
+ *       heap-use-after-free) -- the definitive red signal.
  */
 
 static coro_status cp_sleep_st;

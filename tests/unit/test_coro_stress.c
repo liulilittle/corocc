@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Milestone M2 Task 5, part 4: randomised stress over the credential API.
+/* Randomised stress over the credential API.
  *
  * A deterministic xorshift sequence drives create/start/resume/yield/cancel/
  * destroy against a pool of coroutines for a fixed number of steps, asserting

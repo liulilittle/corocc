@@ -8,7 +8,7 @@
  * function and, on the return, publishes the result through the scope
  * event chain. The trampoline is the only writer of a child's result cell.
  *
- * Concurrency rules (W11 dual-audit verdict v1.8, section 3):
+ * Concurrency rules:
  *   - no second lock: every table and chain mutation runs under the
  *     runtime's activity lock; the state word is the one atomic;
  *   - one parking point: a waiter parks on the scope's own event chain,
@@ -22,10 +22,9 @@
  * internals (the coro_rt.h convention); this file casts them at the use
  * sites, exactly like rt_sync.c casts its public chain heads.
  *
- * Step note: the wait family's park loop landed with step 2 (the cell
- * contract cannot be observed without a blocking wait), the watchdog still
- * lands with step 6. A thread caller gets one predicate check until the
- * thread-blocking entry arrives with step 7.
+ * Note: the wait family's park loop relies on the cell contract, which is
+ * observable only through a blocking wait; plain-thread callers are served
+ * by the thread-blocking entries.
  */
 #include "scheduler/rt.h"
 
@@ -244,7 +243,7 @@ static void scope_collect_children(coro_rt_t* rt, coro_rt_scope_t* s) {
 
 coro_status coro_rt_scope_init(coro_rt_scope_t* s) {
     if (!s) return CORO_EINVAL;
-    memset(s, 0, sizeof *s);   /* SCOPE_OPEN is the zero state (D11) */
+    memset(s, 0, sizeof *s);   /* SCOPE_OPEN is the zero state */
     return CORO_OK;
 }
 
@@ -309,7 +308,7 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
     /* Register under the activity lock, with the re-check inside it: a
        cancel that lands between the front check above and this append is
        caught here, so no child is ever registered on a scope that is
-       already canceling (D10). The refused path registers nothing. */
+       already canceling. The refused path registers nothing. */
     coro_plat_mutex_lock(&rt->act_lock);
     st = scope_state_load(s);
     if (st != SCOPE_OPEN) {
@@ -406,7 +405,7 @@ coro_status coro_rt_scope_cancel(coro_rt_t* rt, coro_rt_scope_t* s) {
     /* Own the OPEN -> CANCELING transition. The walk runs in chunks: each
        chunk is snapshotted and flagged under the lock and issued outside
        it (coro_rt_cancel signals through the lock). No cell is written
-       here -- the child's own return value stays the only result (D5). */
+       here -- the child's own return value stays the only result. */
     for (;;) {
         coro_t* batch[SCOPE_CANCEL_CHUNK];
         size_t n = 0;
@@ -485,15 +484,15 @@ static void scope_park_once(coro_rt_t* rt, coro_rt_scope_t* s, rt_node* self) {
  * park are atomic against the event's own critical section and no wakeup is
  * lost. The wait is immune to the waiter's own cancellation: a cancellation
  * consumed at the park's safe point detaches the waiter and the loop
- * continues, because an interrupted wait would strand the children
- * (verdict 3.1). Each park corresponds to exactly one wake (the 1:1
+ * continues, because an interrupted wait would strand the children.
+ * Each park corresponds to exactly one wake (the 1:1
  * balance): the event detaches the whole chain and wakes every node once.
  */
 static coro_status scope_wait_core(coro_rt_t* rt, coro_rt_scope_t* s) {
     if (scope_state_load(s) == SCOPE_DESTROYED) return CORO_ESTALE;
     rt_node* self = scope_self_node();
     if (!self) {
-        /* The thread-blocking entry (verdict 3.7): block on the runtime's
+        /* The thread-blocking entry: block on the runtime's
            settled condition -- the same act_lock + cond shape
            coro_rt_wait_all uses -- until the scope's live count reaches
            zero, then drain. */
@@ -510,7 +509,7 @@ static coro_status scope_wait_core(coro_rt_t* rt, coro_rt_scope_t* s) {
     }
 }
 
-/* group first_error (verdict 3.3): wait until one child reports a non-OK
+/* group first_error: wait until one child reports a non-OK
  * result, then cancel the remaining children and keep waiting for the
  * drain, so the structured invariant (every child accounted for) holds;
  * the first error in completion order is returned. With no error at all
@@ -555,7 +554,7 @@ static coro_status scope_wait_first_error_core(coro_rt_t* rt,
     }
 }
 
-/* group first_done (verdict 3.3): return the first completed child's
+/* group first_done: return the first completed child's
  * result. No drain and no transition happen here -- the scope stays alive
  * and usable, and the caller MUST follow up with wait or cancel (a
  * destroy without that reports EBUSY: a detectable leak, documented). */
@@ -594,7 +593,7 @@ coro_status coro_rt_scope_wait(coro_rt_t* rt, coro_rt_scope_t* s) {
     return scope_wait_core(rt, s);
 }
 
-/* ---- wait_for and its watchdog (verdict 3.2) ---- */
+/* ---- wait_for and its watchdog ---- */
 
 /* The watchdog context: a retained spawn that is NOT a child of the scope
    (it never enters the table and never touches live), built before the
@@ -623,7 +622,7 @@ static void watchdog_entry(void* pv) {
     (void)coro_rt_scope_cancel(wd->rt, wd->scope);
 }
 
-/* The watchdog's three-step reclaim, in the verdict's order: cancel (a
+/* The watchdog's three-step reclaim: cancel (a
    no-op when the watchdog already died naturally on the timeout path),
    join (releases when it is dead; returns immediately then), collect with
    the bounded EBUSY retry. Its result is always OK or a bounded failure of
@@ -687,7 +686,7 @@ coro_status coro_rt_scope_wait_for(coro_rt_t* rt, coro_rt_scope_t* s,
 
     /* The watchdog first: fail-fast (ENOMEM) before anything else. Its
        stack is explicit and small (it runs a sleep, one lock and one
-       cancel; the 256 KiB default would be waste), per the verdict. */
+       cancel; the 256 KiB default would be waste). */
     struct scope_watchdog* wd =
         (struct scope_watchdog*)calloc(1, sizeof *wd);
     if (!wd) return CORO_ENOMEM;

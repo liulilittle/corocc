@@ -48,19 +48,21 @@ typedef struct coro_ctx {
  *
  * Prepares the context so that the first swap into it invokes @p entry with
  * @p arg. The context borrows @p stk; the stack must outlive the context
- * and remain unchanged for the context's lifetime. On failure the context
- * is left zeroed.
+ * and remain unchanged for the context's lifetime. On success the context
+ * object is zeroed and then filled; on failure it is left untouched.
  *
  * @param cx     Context storage to initialize. Must not be NULL.
  * @param stk    Live stack (from coro_stack_alloc) to run on. Must not be
- *               NULL and must currently be allocated.
+ *               NULL. Whether the stack is currently allocated is a caller
+ *               precondition, not validated by the call.
  * @param entry  Coroutine entry point, called as entry(arg). Must not be
  *               NULL. Returning from entry is allowed: control returns to
  *               the context that last swapped in (never terminates the
  *               process).
  * @param arg    Opaque argument forwarded verbatim to entry.
- * @return 0 on success; a negative value (CORO_EINVAL) if any argument is
- *         NULL or the stack is not live.
+ * @return 0 on success; CORO_EINVAL (a non-zero status code) if any argument
+ *         is NULL. Failure is reported as a non-zero status, so `if (rc)`
+ *         is the valid failure test.
  *
  * Precondition: cx is not already live (call coro_ctx_destroy first).
  */

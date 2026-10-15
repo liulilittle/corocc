@@ -7,17 +7,17 @@
 #include <string.h>
 #include <time.h>
 
-/* L3 step 3: the wait predicate (verdict sections 3.1/3.3).
+/* The wait predicate.
  *
  *   - the predicate is live==0, checked under the runtime's activity lock,
  *     parked on the scope's event chain -- one chain, one parking point;
  *   - the child-exit event wakes every parked waiter, so several waiters
  *     on one scope all observe the drain, each resumed exactly once per
  *     park (the 1:1 balance; a double wake would relink the node in the
- *     worker's inbox and hang or crash -- the D21 shape);
+ *     worker's inbox and hang or crash);
  *   - the wait survives its waiter's own cancellation: a request consumed
  *     at the park's safe point detaches the waiter and the loop continues
- *     (verdict 3.1, the documented caller-level contract);
+ *     (the documented caller-level contract);
  *   - children registered WHILE a waiter is parked still count: the wait
  *     ends only when the scope's live count really reached zero.
  *

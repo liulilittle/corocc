@@ -307,6 +307,11 @@ COROCC_API coro_rt_t* coro_rt_create(size_t nthreads);
  * coro_rt_spawn_h handle does not block destruction; collect it before or
  * after. After a successful destroy the runtime handle is invalid.
  *
+ * A destroy must be exclusive: concurrent coro_rt_spawn/coro_rt_spawn_h or
+ * coro_rt_wait_all calls during the destroy are a caller violation and must
+ * not be attempted; quiesce the submitters and waiters first (see
+ * docs/threading.md).
+ *
  * @param rt  Runtime to destroy; NULL is accepted and ignored.
  * @return CORO_OK on success; CORO_EBUSY when coroutines are still live.
  */
@@ -318,6 +323,10 @@ COROCC_API coro_status coro_rt_destroy(coro_rt_t* rt);
  * The coroutine starts on some worker as soon as a worker has a free slot; it
  * does not run inside this call. When it finishes, the runtime reclaims every
  * resource (handle, stack, bookkeeping node), so callers need no cleanup.
+ *
+ * Submissions to one runtime are not internally serialized: when several
+ * threads submit to the same runtime, the caller must serialize the calls
+ * externally (see docs/threading.md).
  *
  * @param rt     Runtime to queue on. Must not be NULL.
  * @param attr   Attributes, or NULL for the defaults.

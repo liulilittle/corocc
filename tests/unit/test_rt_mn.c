@@ -3,7 +3,7 @@
 #include <corocc/coro_rt.h>
 #include <corocc/coro_sched.h>
 
-/* Milestone: M:N work-stealing runtime.
+/* M:N work-stealing runtime.
  *
  * Behaviours being pinned:
  *   - coro_rt_create(1) is a single-worker runtime that makes progress without

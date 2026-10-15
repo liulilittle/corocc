@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Single-site build + test driver: configure -> required-macro assertion ->
-# -static build -> qemu ctest -> population assertion. M10 CI design (v1.2
-# sections 2/5): the workflow YAML only installs dependencies and calls this
-# script per matrix shard; running it locally is exactly the same code path.
+# -static build -> qemu ctest -> population assertion. CI design: the workflow
+# YAML only installs dependencies and calls this script per matrix shard;
+# running it locally is exactly the same code path.
 #
 # Usage: scripts/ci/build-test.sh <site> [options] [-- <cmake args>...]
 #
@@ -24,12 +24,12 @@
 #   --site <key>                explicit ci/site-matrix.env row key
 #   --no-clean                  keep the existing build directory
 #
-# Floors come from ci/site-matrix.env (M10 v1.2 section 3): registered is the
-# raw `ctest -N` count (no -E), executed uses the same -E as the run; both are
-# lower bounds (>=), so an image carrying the Boost coexistence suites reports
-# +1 and still passes. The global constant ALL_EXCL='cpp_perf' is applied on
-# every site (verdict item 2); the row's excludes column adds site exemptions
-# (ASan: the three documented M9 exemptions).
+# Floors come from ci/site-matrix.env: registered is the raw `ctest -N` count
+# (no -E), executed uses the same -E as the run; both are lower bounds (>=), so
+# an image carrying the Boost coexistence suites reports +1 and still passes.
+# The global constant ALL_EXCL='cpp_perf' is applied on every site; the row's
+# excludes column adds site exemptions (ASan: the three documented
+# exemptions).
 #
 # Required-macro assertion (G0): asan/tsan/nospin sites must show
 # COROCC_ASAN / COROCC_TSAN / COROCC_PROBE_NOSPIN = ON in the build cache, so a
@@ -133,8 +133,8 @@ if [ "$EXCLUDE_SET" -eq 1 ]; then
     SITE_EXCL="$EXCLUDE"
 elif [ "$MATRIX_ENV" = "asan" ]; then
     # The three misuse-detection suites abort differently under ASan (the
-    # sanitizer intercepts the detection path); documented exemption set, see
-    # the M9 seal dossier (.opencode/logs/execM9/M9-W3-report.md 32-33).
+    # sanitizer intercepts the detection path); documented exemption set (the
+    # ASan site row in ci/site-matrix.env).
     SITE_EXCL="coro_exactlyonce coro_crossresume conc_double_resume"
 else
     SITE_EXCL="$ROW_EXCL"

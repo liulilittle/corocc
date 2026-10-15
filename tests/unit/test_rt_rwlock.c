@@ -4,7 +4,7 @@
 #include <corocc/coro_rt.h>
 #include <string.h>
 
-/* M5 T2: coro_rt_rwlock -- a writer-preferring readers/writer lock on the
+/* coro_rt_rwlock -- a writer-preferring readers/writer lock on the
  * M:N runtime.
  *
  * Behaviours pinned:
@@ -142,7 +142,7 @@ static void run_cancel_scenario(void) {
     CHECK(g_final_unlock == CORO_OK);
 }
 
-/* ---- two writers queued behind a reader, only the tail cancelled (B-3) ---- */
+/* ---- two writers queued behind a reader, only the tail cancelled ------- */
 
 static coro_rt_rwlock_t g_b3;
 static coro_t*         g_b3_w1;
@@ -291,7 +291,7 @@ static void run_tests(void) {
     /* ---- cancellation while the lock is taken ---- */
     run_cancel_scenario();
 
-    /* ---- B-3: two writers queued, the tail one cancelled ---- */
+    /* ---- two writers queued, the tail one cancelled ----------- */
     run_b3_scenario();
 }
 

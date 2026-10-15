@@ -9,8 +9,7 @@
  * One structure per thread holds everything the library needs to drive
  * coroutines on that thread: the context of the thread's own code (used as
  * the `from` side when the thread's flow resumes a coroutine) and the
- * coroutine currently running on it. The delivery queue joins it with
- * milestone M3.
+ * coroutine currently running on it, plus its delivery queue.
  *
  * The runtime is created on first use and released by a thread-exit hook, so
  * it never outlives its thread. Its address is also the thread's owner key,

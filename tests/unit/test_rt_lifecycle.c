@@ -10,9 +10,8 @@
 #include <windows.h> /* Sleep in the thread-side wait below */
 #endif
 
-/* L2 hardening set (R1-R4): the runtime behaviours the structured-concurrency
- * layer is built on, each pinned against a defect the dual audit red-proved
- * on the pre-fix runtime.
+/* L2 hardening set: the runtime behaviours the structured-concurrency layer
+ * is built on, each pinned against a defect found on the pre-fix runtime.
  *
  *   - a retained spawn_h handle is reclaimed by coro_rt_collect, which is
  *     pure reclamation: the live count was already decremented once, by the
@@ -25,9 +24,9 @@
  *     it, because the cancel branch retired the park marker (without that a
  *     plain yield after a cancelled join strands the coroutine);
  *
- * The cancel-of-a-sync-chain scene was moved out of this set by the W11 (c)
- * verdict (documented C-level limitation for the scope layer instead); the
- * exactly-once wake-request claim scene lands with R4.
+ * The cancel-of-a-sync-chain scene is out of this set (it stays a documented
+ * caller-level limitation instead); the exactly-once wake-request claim is
+ * covered too.
  */
 
 static void quick_entry(void* arg) { (void)arg; }
@@ -144,12 +143,12 @@ static void j2_canceller_entry(void* arg) {
     (void)coro_rt_sleep(rt, coro_monotonic_ns() + 5000000ull);  /* ~5ms */
     /* Latched while the joiner is parked. A parked join-chain member is
        released by the target's death (waking a sync-chain park from a
-       cancel is the held-back R1), so the request surfaces exactly when
-       the target finishes and the join's cancel branch re-checks: the
-       wait condition is satisfied, so CORO_OK is reported, not the
-       cancellation. (If R1 ever lands, this expectation becomes
-       CORO_ECANCELED -- the joiner would wake at 5ms with the target
-       still alive.) */
+       cancel is held back -- a documented caller-level limitation), so the
+       request surfaces exactly when the target finishes and the join's
+       cancel branch re-checks: the wait condition is satisfied, so CORO_OK
+       is reported, not the cancellation. (If that ever changes, this
+       expectation becomes CORO_ECANCELED -- the joiner would wake at 5ms
+       with the target still alive.) */
     (void)coro_rt_cancel(rt, g_j2_joiner);
 }
 
@@ -268,7 +267,7 @@ static void run_tests(void) {
         CHECK(coro_rt_destroy(g_j2_rt) == CORO_OK);
     }
 
-    /* ---- V4 contract: collect after destroy touches no runtime ---- */
+    /* ---- contract: collect after destroy touches no runtime ---------- */
     {
         coro_rt_t* rt = coro_rt_create(1);
         CHECK(rt != NULL);

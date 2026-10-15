@@ -14,9 +14,8 @@
  * monotone token sequence need.
  *
  * This header is INTERNAL: it is not installed and is not part of the public
- * API or ABI. The MSVC path cannot be exercised until the milestone-M9
- * Windows backend lands; it is written against the documented intrinsic
- * contract and is verified by CI as soon as that job exists.
+ * API or ABI. The MSVC path is written against the documented intrinsic
+ * contract and is verified by CI on the Windows job.
  */
 #include <stdint.h>
 
@@ -71,7 +70,7 @@ static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
     return __atomic_fetch_or(p, v, __ATOMIC_RELAXED);
 }
 
-/* Release-OR: the publication form for the retire's RT_DONE write (D25/V4).
+/* Release-OR: the publication form for the retire's RT_DONE write.
    A relaxed fetch_or latches the bit; the RELEASE ordering additionally
    publishes every write this thread made before it (the wait-chain detach
    and the retained reading) to the thread whose ACQUIRE load observes the
@@ -153,8 +152,8 @@ typedef char coro_atomic_word_align_must_be_8[(__alignof(uint64_t) == 8) ? 1 : -
    instruction; the one place where store-load order matters (the Chase-Lev
    singleton race) goes through coro_at_fence below, which stays a full
    fence. Define COROCC_ATOMIC_NO_FASTPATH to fall back to the interlocked
-   forms (A/B measurement switch; the decision is recorded in the M9 design,
-   section 2.5). MSVC ARM64 is outside the M9 scope. */
+   forms (an A/B measurement switch). MSVC ARM64 is outside the supported
+   scope. */
 #if defined(_M_X64) && !defined(COROCC_ATOMIC_NO_FASTPATH)
 
 static inline uint64_t coro_at_load(const volatile uint64_t* p) {
@@ -227,8 +226,8 @@ static inline void coro_at_fence(void) {
     /* A full fence without <windows.h>: the compiler barrier orders the
        source, __faststorefence orders the hardware. On x64 that pair is
        exactly what winnt.h's MemoryBarrier expands to, which keeps this
-       internal header free of the Windows SDK (the M9 W2a fix for the
-       "MemoryBarrier undeclared" build failure). x64 MSVC is the M9 scope. */
+       internal header free of the Windows SDK (avoiding the "MemoryBarrier
+       undeclared" build failure). x64 MSVC is the supported scope. */
     _ReadWriteBarrier();
     __faststorefence();
 }

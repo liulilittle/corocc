@@ -743,13 +743,12 @@ inline Box* box_new(A&&... a) {
 }
 
 /*
- * normalize_entry (F-2, audited fix, mergeable candidate): normalise a
- * std::bad_alloc raised while the entry stages the user callable/arguments
- * -- the first hop of the "into the box" migration chain (moving into
- * detail::callable0/callable_args; design 3.2 (1) / 3.3 "tuple storage").
- * Non-bad_alloc user exceptions keep propagating (3.2 (2)); hop 0 -- the
- * call-site transfer into the by-value parameter -- happens in the caller
- * and cannot be caught here (documented propagation).
+ * normalize_entry -- normalise a std::bad_alloc raised while the entry
+ * stages the user callable/arguments: the first hop of moving them into
+ * the box, i.e. into detail::callable0/callable_args. Non-bad_alloc user
+ * exceptions keep propagating; the call-site transfer into the by-value
+ * parameter happens in the caller and cannot be caught here (documented
+ * propagation).
  */
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -774,7 +773,7 @@ inline status normalize_entry(Fn fn) {
 #pragma warning(pop)
 #endif
 
-/* ---- closeout cadence (P1-3): target-directed collect retry ---- */
+/* ---- closeout cadence: target-directed collect retry ---- */
 
 /*
  * collect_retry -- retry coro_rt_collect's EBUSY window (finished but not
@@ -943,7 +942,7 @@ public:
     }
 
     /*
-     * wait() -- the target-directed closeout (P1-3). Never touches
+     * wait() -- the target-directed closeout. Never touches
      * coro_rt_wait_all: unrelated parked coroutines cannot hold this call
      * up. Inside a coroutine it joins (parks until the target ends); on a
      * plain thread it rides the retirement window out with the bounded
@@ -1295,9 +1294,8 @@ public:
      * resource. An exception escaping the body goes to the detached handler.
      *
      * C4702 silencing: see the note above detail::run_code (a user
-     * callable whose move constructor always throws -- the D19 shape the
-     * tests pin -- makes the trailing return unreachable for that
-     * instantiation).
+     * callable whose move constructor always throws makes the trailing
+     * return unreachable for that instantiation).
      */
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -1324,9 +1322,9 @@ public:
      * spawn_h -- a managed task. On failure out is untouched; a live out is
      * closed out (dtor semantics) before the new handle binds.
      *
-     * C4702 silencing covers this pair too (the audit-B family probe's
-     * move-always-throws instantiation re-emits the warning in the simple
-     * form; the variadic twin sits in the same region for uniformity).
+     * C4702 silencing covers this pair too (a move-always-throws
+     * instantiation re-emits the warning in the simple form; the variadic
+     * twin sits in the same region for uniformity).
      */
     template <class R, class F>
     status spawn_h(task<R>& out, F f, const attrs& a = attrs()) {
@@ -1434,8 +1432,8 @@ private:
  * a child that can never finish blocks it, the documented caller
  * responsibility inherited from L3), destroy().
  *
- * Every child -- typed or not -- is registered with a non-NULL cell_out
- * (P1-1): a child that ends abnormally (an exception) writes ECANCELED into
+ * Every child -- typed or not -- is registered with a non-NULL cell_out:
+ * a child that ends abnormally (an exception) writes ECANCELED into
  * its C cell, which is what drives coro_rt_group_wait_first_error's early
  * exit. The wrapper never reads that C alias: the code and exception the C++
  * side sees come from the wrapper's own snapshot (the child's shared state),
@@ -1648,7 +1646,7 @@ private:
             return CORO_ENOMEM;
         }
         coro_attr_t ca = a.c_attr(box->name_ptr());
-        /* P1-1: a non-NULL cell_out for EVERY child (the received alias is
+        /* A non-NULL cell_out for EVERY child (the received alias is
          * deliberately never read). A stack local is required: the child may
          * finish -- and the box goes -- before the C call returns, while the
          * alias is written at the very end of that call. */
@@ -2146,9 +2144,8 @@ public:
         return status(coro_sched_cancel(s_, c));
     }
 
-    /* ---- spawns (C4702 silencing: the audit-B family probe's
-     * move-always-throws instantiation; sites 2080/2093 in the frozen
-     * tree; the variadic twins ride the same region) ---- */
+    /* ---- spawns (C4702 silencing: a move-always-throws instantiation;
+     * the variadic twins ride the same region) ---- */
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4702)

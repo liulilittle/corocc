@@ -107,7 +107,7 @@ static void test_cpp_task_joined_by_c(void) {
 }
 
 static void test_c_consumer_sees_abnormal_marker(void) {
-    /* The cross-language note (A8 item 3): a C consumer waiting a scope that
+    /* The cross-language note: a C consumer waiting a scope that
      * holds C++ children sees CORO_ECANCELED for an uncaptured exception --
      * and that is what drives the C-level early exit. */
     corocc::runtime rt(2);

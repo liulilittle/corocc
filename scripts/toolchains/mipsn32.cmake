@@ -2,7 +2,7 @@
 # the multilib support and the libc6-dev-mipsn32-cross sysroot provide the
 # N32 libraries), tests under qemu-mipsn32.
 # The N32 context-switch backend (src/arch/mips32_n32_elf_gas.S) is
-# implemented (W6, hand-written; big/little endian via __MIPSEL__).
+# hand-written; big/little endian via __MIPSEL__.
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR mipsn32)
 set(COROCC_ABI mips_n32)                     # authoritative backend selector

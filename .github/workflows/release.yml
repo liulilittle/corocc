@@ -2,7 +2,7 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:                      # rebuild/re-upload entry (verdict item 2)
+  workflow_dispatch:                      # rebuild/re-upload entry
     inputs:
       tag:
         description: "Existing tag to rebuild and re-upload (e.g. v0.1.0)"
@@ -53,7 +53,7 @@ jobs:
         env: { TOOLCHAIN: "${{ matrix.toolchain }}" }
         run: |
           extra=()
-          if [ -n "$TOOLCHAIN" ]; then extra+=(--toolchain "$TOOLCHAIN"); fi   # L2: empty toolchain is not passed
+          if [ -n "$TOOLCHAIN" ]; then extra+=(--toolchain "$TOOLCHAIN"); fi   # an empty toolchain is not passed
           bash scripts/ci/build-test.sh "${{ matrix.abi }}" "${extra[@]}"
       - name: stage dist
         run: bash scripts/ci/stage-dist.sh "${{ matrix.abi }}" "${{ matrix.triple }}" "${{ inputs.tag || github.ref_name }}"
@@ -68,8 +68,8 @@ jobs:
     # 38768083480 job 116536439299): the `windows-2025` label now resolves to
     # the windows-2025-vs2026 image (VS2026 only), which cannot serve the
     # pinned `-G "Visual Studio 17 2022"` generator. The repository's Windows
-    # evidence base is VS2022 (M9 MSVC 19.44, A-2 fix verification 17.14), so
-    # this job pins `windows-2022` to stay aligned with that evidence.
+    # evidence base is VS2022 (MSVC 19.44), so this job pins `windows-2022`
+    # to stay aligned with that evidence.
     # VS2026 / the windows-2025-vs2026 image can become a future nightly
     # experiment, not a gate.
     runs-on: windows-2022

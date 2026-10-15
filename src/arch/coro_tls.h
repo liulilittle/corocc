@@ -10,7 +10,7 @@
  * library keeps. C99 has no thread-local storage keyword, so the compiler's
  * own spelling is selected here. MSVC's __declspec(thread) is safe for the
  * dynamically loaded case on modern toolchains; the Windows backend is
- * exercised from milestone M9 onwards.
+ * exercised on the Windows CI job.
  *
  * This header is INTERNAL: it is not installed and is not part of the public
  * API or ABI.

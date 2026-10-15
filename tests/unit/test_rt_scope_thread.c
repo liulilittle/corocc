@@ -6,7 +6,7 @@
 #include <string.h>
 #include <time.h>
 
-/* L3 step 7: the non-coroutine (thread-blocking) entry (verdict 3.7).
+/* The non-coroutine (thread-blocking) entry.
  *
  * Every wait family call here is issued FROM THE MAIN THREAD: it must
  * block that thread on the runtime's settled condition until the scope

@@ -4,7 +4,7 @@
 /*
  * corocc -- a zero-dependency C/C++ coroutine library.
  *
- * src/platform/coro_plat_locks.h -- internal lock/condition shim (M9).
+ * src/platform/coro_plat_locks.h -- internal lock/condition shim.
  *
  * The runtime layer needs one mutex type and one condition type it can
  * initialize uniformly on every platform: POSIX forwards straight to

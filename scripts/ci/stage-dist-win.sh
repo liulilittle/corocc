@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stage the MSVC x64 distribution and pack
-# corocc-<tag>-x86_64-pc-windows-msvc.zip (design v1.1 section 9.2; runs under
-# Git Bash on the windows-2025 runner -- the workflow upload path uses the
-# same name, asserted by ci/check-workflows.sh).
+# corocc-<tag>-x86_64-pc-windows-msvc.zip (runs under Git Bash on the
+# windows-2025 runner -- the workflow upload path uses the same name, asserted
+# by ci/check-workflows.sh).
 #
 # Usage: scripts/ci/stage-dist-win.sh <tag>
 #
@@ -12,8 +12,8 @@
 #
 # Package layout (zip top level x86_64-pc-windows-msvc/):
 #   lib/corocc.lib + include/corocc + lib/cmake/corocc/* + examples + README
-#   corocc-config.cmake defines COROCC_BUILDING=1 for consumers (M9 probe A2:
-#   without it every call site resolves to __declspec(dllimport) -> LNK2019).
+#   corocc-config.cmake defines COROCC_BUILDING=1 for consumers (without it
+#   every call site resolves to __declspec(dllimport) -> LNK2019).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

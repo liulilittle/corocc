@@ -53,7 +53,7 @@ set(COROCC_ABI_riscv32     "src/arch/riscv32_sysv_elf_gas.S")
 function(corocc_use_ms_pe_backend)
     # Windows x64: the PE/MASM context-switch backend (Boost.Context ms_pe,
     # vendored in src/arch/x86_64_ms.asm). MinGW and non-x64 Windows targets
-    # are outside the M9 scope (MSVC x64 only).
+    # are outside the supported scope (MSVC x64 only).
     enable_language(ASM_MASM)
     # The directory-level /W4 /WX are C/C++ warning flags; ml64 rejects an
     # invalid /W value with A4008 and /WX then turns that into a hard error.

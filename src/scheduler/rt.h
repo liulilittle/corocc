@@ -48,7 +48,7 @@
    scheduler/mpsc.h (included above) under the same guard, so this declaration
    is skipped whenever either of them came first -- which they always do here.
    One guarded declaration keeps the name defined exactly once for strict
-   C11-only toolchains (NDK clang -Wtypedef-redefinition, M9 W2a). */
+   C11-only toolchains (NDK clang -Wtypedef-redefinition). */
 #ifndef COROCC_FWD_RT_NODE
 #define COROCC_FWD_RT_NODE
 typedef struct rt_node rt_node;

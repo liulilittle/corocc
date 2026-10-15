@@ -1,8 +1,8 @@
 #include "../harness.h"
 #include <corocc/coro.h>
 
-/* Milestone M2 Task 5, part 2: failure without side effects, and the rights
-   that a coroutine does not have.
+/* Failure without side effects, and the rights that a coroutine does not
+   have.
  *
  * A rejected operation must change nothing -- not the state word, not the
  * credential, not the stack -- so the caller can retry or route elsewhere.

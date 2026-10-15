@@ -6,7 +6,7 @@
  * Two implementations behind the same contract. The POSIX branch keeps the
  * pthread form the runtime always used (the condition variable is bound to
  * CLOCK_MONOTONIC so timed waits share the scheduler's deadline scale). The
- * Windows branch follows the M9 probe-D shape: SRWLOCK plus
+ * Windows branch follows the Windows-backend shape: SRWLOCK plus
  * CONDITION_VARIABLE, SleepConditionVariableSRW for the waits, with the
  * absolute monotone deadline converted to relative milliseconds and
  * re-derived after every wakeup, so a spurious wakeup cannot fake a

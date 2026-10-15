@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Build and test corocc for every cross target (all context-switch backends
 # are vendored). The per-ABI work is delegated to scripts/ci/build-test.sh so
-# that this local matrix runner and the M10 CI use the exact same code path.
+# that this local matrix runner and the CI use the exact same code path.
 #
 # Environment:
-#   LOG_DIR   base log dir (default .opencode/logs; build-test.sh writes into
-#             $LOG_DIR/ci)
+#   LOG_DIR   base log dir (default: <repo>/ci-logs; build-test.sh writes its
+#             per-site logs into $LOG_DIR)
 #   JOBS      parallel build jobs
 #
 # Usage: scripts/build-all.sh [--abi <name>] [-- keep-going build-test options]
@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# name | toolchain file (all backends are vendored as of W6)
+# name | toolchain file (all backends are vendored)
 TARGETS=(
   "aarch64|scripts/toolchains/aarch64.cmake"
   "aarch64_be|scripts/toolchains/aarch64_be.cmake"
