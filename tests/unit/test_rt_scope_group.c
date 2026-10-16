@@ -31,12 +31,40 @@ struct delay_code {
     coro_status code;
 };
 
-/* Sleeps dc->ms; returns the sleep's own status when the wait was cut
-   (ECANCELED), otherwise the configured code. */
-static coro_status reporter_entry(void* arg) {
+/* Ordering gate for the pair scenes below. Two independent timers (10ms and
+   500ms) leave the completion order at the mercy of scheduling: a stall that
+   spans both deadlines makes the runtime resume the simultaneously expired
+   nodes in deque order (no completion-order promise), and a stall spanning
+   only the cancel window lets the caller's cancel outrun the fast child's
+   report. Both were reproduced by freezing the process (SIGSTOP) across the
+   deadlines: the aggregate/first then legitimately reads ECANCELED (the
+   cancel cut the not-yet-reported child) or OK (the 500ms child completed
+   first). The gate removes the timing assumption while keeping the scene:
+   the second child may only start its own 500ms sleep after the first has
+   finished its 10ms one, so the first completion is always the ESTALE
+   report, and a cancel can only ever cut a child that is inside a park. */
+static coro_rt_sem_t g_order_gate;
+static volatile int  g_first_reported;   /* set by the first child at report */
+
+/* First child: the 10ms timer, reporting dc->code; releases the gate. */
+static coro_status gated_first_entry(void* arg) {
     struct delay_code* dc = (struct delay_code*)arg;
     coro_status st = coro_rt_sleep(g_rt,
                         coro_monotonic_ns() + (uint64_t)dc->ms * 1000000ull);
+    if (st != CORO_OK) return st;
+    g_first_reported = 1;
+    (void)coro_rt_sem_post(g_rt, &g_order_gate);
+    return dc->code;
+}
+
+/* Second child: gated, then its own (long) sleep; a cancel while gated or
+   while sleeping reports ECANCELED (the sleep's own cut status). */
+static coro_status gated_second_entry(void* arg) {
+    struct delay_code* dc = (struct delay_code*)arg;
+    coro_status st = coro_rt_sem_wait(g_rt, &g_order_gate);
+    if (st != CORO_OK) return st;
+    st = coro_rt_sleep(g_rt,
+                       coro_monotonic_ns() + (uint64_t)dc->ms * 1000000ull);
     return st != CORO_OK ? st : dc->code;
 }
 
@@ -72,6 +100,7 @@ struct fdone_scene {
     coro_rt_scope_t*    s;
     coro_status         first;         /* out */
     unsigned long long  elapsed_ns;    /* out */
+    volatile int        waiter_done;   /* out: the waiter returned */
     int                 followup;      /* 1: drain afterwards */
     coro_status         after;         /* out: the follow-up wait */
 };
@@ -81,6 +110,7 @@ static void first_done_waiter(void* arg) {
     uint64_t t0 = coro_monotonic_ns();
     (void)coro_rt_group_wait_first_done(g_rt, sc->s, &sc->first);
     sc->elapsed_ns = (unsigned long long)(coro_monotonic_ns() - t0);
+    sc->waiter_done = 1;
     if (sc->followup) sc->after = coro_rt_scope_wait(g_rt, sc->s);
 }
 
@@ -123,9 +153,11 @@ static void run_tests(void) {
         memset(&s, 0, sizeof s);
         memset(&sc, 0, sizeof sc);
         sc.s = &s;
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &fast,
+        coro_rt_sem_init(&g_order_gate, 0);
+        g_first_reported = 0;
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   &cfast) == CORO_OK);
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &slow,
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
                                   &cslow) == CORO_OK);
         CHECK(coro_rt_spawn(rt, NULL, first_error_waiter, &sc) == CORO_OK);
         CHECK(coro_rt_wait_all(rt) == CORO_OK);
@@ -162,12 +194,28 @@ static void run_tests(void) {
         memset(&s, 0, sizeof s);
         memset(&sc, 0, sizeof sc);
         sc.s = &s;
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &fast,
+        coro_rt_sem_init(&g_order_gate, 0);
+        g_first_reported = 0;
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   NULL) == CORO_OK);
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &slow,
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
                                   NULL) == CORO_OK);
         CHECK(coro_rt_spawn(rt, NULL, first_done_waiter, &sc) == CORO_OK);
-        sleep_ms(120);   /* the first child reported; the second sleeps on */
+        /* Wait for the waiter's observable return instead of a fixed sleep:
+           a stall that ends exactly when the sleep would makes the value
+           checks race the post-stall wakeup cascade and read the zero
+           initialization (reproduced by freezing the process across the
+           10ms deadline). The poll only removes the stale-read race -- the
+           waiter still returns on its own promptness, which the elapsed
+           bound below anchors. */
+        {
+            unsigned spins = 0;
+            while (!sc.waiter_done && spins < 5000u) {
+                sleep_ms(1);
+                ++spins;
+            }
+        }
+        CHECK(sc.waiter_done == 1);
         CHECK(sc.first == CORO_ESTALE);         /* the first completion */
         CHECK(sc.elapsed_ns < 300000000ull);
         /* No follow-up yet: the scope is still live -- destroy detects it
@@ -193,12 +241,25 @@ static void run_tests(void) {
         memset(&sc, 0, sizeof sc);
         sc.s = &s;
         sc.followup = 1;
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &fast,
+        coro_rt_sem_init(&g_order_gate, 0);
+        g_first_reported = 0;
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   &cfast) == CORO_OK);
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, reporter_entry, &slow,
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
                                   &cslow) == CORO_OK);
         CHECK(coro_rt_spawn(rt, NULL, first_done_waiter, &sc) == CORO_OK);
-        sleep_ms(50);   /* the first child reported (10ms); the slow sleeps */
+        /* Cancel only after the first child reported (the gate makes that
+           the ESTALE report): waiting on the flag removes the stall race in
+           which the cancel outruns the report and cuts the fast child
+           (reproduced with a SIGSTOP across the 10ms deadline). */
+        {
+            unsigned spins = 0;
+            while (!g_first_reported && spins < 5000u) {
+                sleep_ms(1);
+                ++spins;
+            }
+        }
+        CHECK(g_first_reported == 1);
         CHECK(coro_rt_scope_cancel(rt, &s) == CORO_OK);   /* cut the slow */
         CHECK(coro_rt_wait_all(rt) == CORO_OK);
         CHECK(sc.first == CORO_ESTALE);
