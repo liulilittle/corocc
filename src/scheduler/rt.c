@@ -27,6 +27,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <time.h>
+#if !defined(_WIN32)
+#include <sched.h>    /* sched_yield: the retire purge loop's relax */
+#endif
 
 #if defined(__linux__)
 #include <unistd.h>   /* sysconf: default worker count */
@@ -76,6 +79,50 @@ static int node_cas_clear(rt_node* n, unsigned bit) {
     }
 }
 
+/* Portable relax for the retire purge loop: let a pusher that is between its
+   claim and its push run. */
+static void rt_cpu_relax(void) {
+#if defined(_WIN32)
+    SwitchToThread();
+#else
+    (void)sched_yield();
+#endif
+}
+
+/* Claim the node's single delivery reference (BT): at most one live inbox
+   entry / deque entry exists per node at any time. A delivery that loses the
+   claim is collapsed into the live one; the claim is released by the worker
+   that consumes the entry (pop/steal), by the retire purge, or by a drop.
+   The claim refuses a node that is retiring or already retired, so no new
+   reference can be created after RT_DYING/RT_DONE is visible. */
+static int rt_queue_claim(rt_node* n) {
+    uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
+    for (;;) {
+        if (cur & (RT_QUEUED | RT_DYING | RT_DONE)) return 0;
+        uint64_t exp = cur;
+        if (coro_at_cas((volatile uint64_t*)&n->flags, &exp, cur | RT_QUEUED)) {
+            return 1;
+        }
+        cur = exp;
+    }
+}
+
+/* BT: deliver a collapsed wake's pending drive (B' minimal state machine:
+   PENDING means one drive is owed to the flow; the park publication is the
+   deliverer). Claim the delivery slot FIRST and clear PENDING only when the
+   claim succeeds: the very situation that set PENDING (a live entry in
+   flight) makes the claim fail, and clearing first would destroy the
+   promise exactly when it is owed. On failure PENDING stays set for the
+   next park publication, the gate re-arm, or the in-flight drive to
+   discharge. */
+int rt_pending_requeue(rt_node* n) {
+    if (!node_test(n, RT_WAKE_PENDING)) return 0;
+    if (!rt_queue_claim(n)) return 0;   /* still owed: keep PENDING */
+    node_clear(n, RT_WAKE_PENDING);
+    mpsc_push(&n->worker->inbox, n);
+    return 1;
+}
+
 /* ---- live count (atomic) ---- */
 
 static void live_add(coro_rt_t* rt, long d) {
@@ -106,12 +153,38 @@ static void signal_activity(coro_rt_t* rt) {
    bit is the single-requeue gate against the worker that drove the node into
    the park: exactly one of the two enqueues the node, so it can never be
    queued twice and driven by two workers at once. */
-void rt_node_wake(coro_rt_t* rt, rt_node* n) {
-    if (node_cas_clear(n, RT_WAITING)) {
-        mpsc_push(&n->worker->inbox, n);
+int rt_node_wake(coro_rt_t* rt, rt_node* n) {
+    /* Consume the park WAITING atomically with a corpse check: a node that
+       retired between the releaser's pop and this wake refuses the handoff
+       (return 0), so the releaser serves the next waiter instead of letting
+       the handoff evaporate on a corpse. On a live park the wake either
+       claims the delivery (push) or collapses into the live entry and
+       records RT_WAKE_PENDING, which the consuming gate discharges by
+       re-arming if that drive is spent while the flow is running. */
+    uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
+    for (;;) {
+        if (cur & (RT_DONE | RT_DYING)) {
+            signal_activity(rt);
+            return 0;
+        }
+        if (!(cur & RT_WAITING)) {
+            signal_activity(rt);
+            return 0;
+        }
+        uint64_t exp = cur;
+        if (coro_at_cas((volatile uint64_t*)&n->flags, &exp,
+                        cur & ~(uint64_t)RT_WAITING)) {
+            if (rt_queue_claim(n)) {
+                node_clear(n, RT_WAKE_PENDING);
+                mpsc_push(&n->worker->inbox, n);
+            } else {
+                node_set(n, RT_WAKE_PENDING);
+            }
+            signal_activity(rt);
+            return 1;
+        }
+        cur = exp; /* lost: exp now holds the observed value */
     }
-    /* Else the driver already requeued the node locally; waking is done. */
-    signal_activity(rt);
 }
 
 /* ---- stack reclaim pool ---- */
@@ -149,23 +222,31 @@ static int rt_stack_pop(coro_rt_t* rt, coro_stack* out) {
 
 /* ---- worker queues ---- */
 
-/* A worker that owns an inbox turns every drained node into a deque entry. */
+/* A worker that owns an inbox turns every drained node into a deque entry.
+   BT: an entry is the node's single delivery reference (RT_QUEUED); it is
+   routed to the deque unconditionally -- a stale entry resumes the node
+   wherever it is parked and the woken paths re-check (genuineness) and
+   detach from any chain they were still linked on. A dying node's entry is
+   dropped and its reference released. */
 static void drain_inbox(rt_worker* w) {
     rt_node* n;
+    int routed = 0;
     while ((n = mpsc_pop(&w->inbox)) != NULL) {
-        if (node_test(n, RT_WAKE_REQ)) {
-            node_clear(n, RT_WAKE_REQ);
-            if (coro_timer_heap_remove(&w->sleepers, &n->timer) == 0) {
-                /* Single-requeue gate: a head-of-timer expiration may win the
-                   same bit for the very node. */
-                if (node_cas_clear(n, RT_WAITING)) {
-                    wsdeque_push(&w->queue, n);
-                }
-            }
+        if (node_test(n, RT_DYING | RT_DONE)) {
+            node_clear(n, RT_QUEUED);
             continue;
         }
+        if (node_test(n, RT_WAKE_REQ)) {
+            node_clear(n, RT_WAKE_REQ);
+            (void)coro_timer_heap_remove(&w->sleepers, &n->timer);
+        }
         wsdeque_push(&w->queue, n);
+        routed = 1;
     }
+    /* A routed entry can outlive the wake's activity signal (the worker was
+       busy driving a hot coroutine at that moment); re-raise it so an idle
+       peer can steal the entry instead of it starving at the deque top. */
+    if (routed) signal_activity(w->rt);
 }
 
 /* Move every node whose deadline has passed from this worker's timer heap to
@@ -182,9 +263,12 @@ static void collect_expired(rt_worker* w) {
         if (!t || t->deadline > now) return;
         t = coro_timer_heap_pop(&w->sleepers);
         rt_node* n = (rt_node*)(void*)((char*)t - offsetof(rt_node, timer));
-        /* Single-requeue gate against a concurrent cancel/wake of the node. */
-        if (node_cas_clear(n, RT_WAITING)) {
+        /* BT: route only if this side owns the single delivery reference; a
+           live cancel entry routes the node itself. */
+        if (!(node_test(n, RT_DYING | RT_DONE)) &&
+            node_cas_clear(n, RT_WAITING) && rt_queue_claim(n)) {
             wsdeque_push(&w->queue, n);
+            signal_activity(w->rt);
         }
     }
 }
@@ -222,8 +306,20 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
     int retained;
     coro_plat_mutex_lock(&rt->act_lock);
     retained = node_test(n, RT_RETAINED);
+    node_set(n, RT_DYING);      /* no new delivery reference from now on */
     waiter = n->waiter_next;
     n->waiter_next = NULL;
+    coro_plat_mutex_unlock(&rt->act_lock);
+    /* BT death window: an entry pushed before RT_DYING must be consumed here
+       (the owner worker drains its own inbox; a push that claimed the slot
+       just before RT_DYING lands within the loop). The reference cannot be
+       in a deque: a routed entry is consumed by the claim that drives the
+       node, and this worker is the one driving it now. */
+    while (node_test(n, RT_QUEUED)) {
+        drain_inbox(n->worker);
+        if (node_test(n, RT_QUEUED)) rt_cpu_relax();
+    }
+    coro_plat_mutex_lock(&rt->act_lock);
     node_set_rel(n, RT_DONE);   /* publish: retire's LAST write to n */
     coro_plat_mutex_unlock(&rt->act_lock);
     while (waiter) {
@@ -272,9 +368,16 @@ static void worker_main(void* pv) {
         if (n) {
             coro_token next = CORO_TOKEN_NONE;
             coro_status st;
+            /* BT: consuming this deque entry releases the node's single
+               delivery reference; a dying/dead node is never driven. */
+            node_clear(n, RT_QUEUED);
+            if (node_test(n, RT_DYING | RT_DONE)) continue;
             n->worker = w;
             w->running = n;
             st = rt_claim(n, &next);
+            if (st == CORO_OK) {
+                node_clear(n, RT_WAKE_PENDING);   /* the drive fulfils the promise */
+            }
             w->running = NULL;
             if (st == CORO_OK) {
                 if (next == CORO_TOKEN_DEAD) {
@@ -286,11 +389,27 @@ static void worker_main(void* pv) {
                            cancel drain) owns the requeue, so the driver only
                            retires the park marker and leaves the node off the
                            run queue. A plain yield (no park marker) goes back
-                           on the queue immediately. */
+                           on the queue immediately -- tracked by the same
+                           single QUEUED reference, so "an entry exists" stays
+                           equivalent to "QUEUED is held" for deque entries
+                           too (a pending stale entry already owes the drive). */
                         node_clear(n, RT_PARKED);
-                    } else {
+                    } else if (rt_queue_claim(n)) {
                         wsdeque_push(&w->queue, n);
                     }
+                }
+            } else {
+                /* BT: the claim was lost (EBUSY/SWITCHING/ESTALE) -- the flow
+                   is being driven by its owner right now. Discharge the
+                   collapse promise (RT_WAKE_PENDING) and re-arm into the
+                   owner's inbox: the owner drains only after its current
+                   drive ends, so the re-armed entry then meets a suspended
+                   flow and rt_claim succeeds. Dead/dying nodes are refused by
+                   the claim and purged by the retire drain. */
+                node_clear(n, RT_WAKE_PENDING);
+                if (rt_queue_claim(n)) {
+                    mpsc_push(&n->worker->inbox, n);
+                    signal_activity(rt);
                 }
             }
             /* The claim was lost (CORO_EBUSY busy, CORO_ESTALE parked at a
@@ -431,7 +550,7 @@ static coro_status rt_spawn_common(coro_rt_t* rt, const coro_attr_t* attr,
     n->flags = retained ? RT_RETAINED : 0;
     n->worker = spawn_worker(rt);
     live_add(rt, 1);
-    mpsc_push(&n->worker->inbox, n);
+    if (rt_queue_claim(n)) mpsc_push(&n->worker->inbox, n);
     signal_activity(rt);
 
     if (out) *out = n->coro;
@@ -514,8 +633,10 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
     target->waiter_next = self;
     node_set(self, RT_WAITING);
     node_set(self, RT_PARKED);
+    (void)rt_pending_requeue(self);   /* round-5: park consumes pending */
     coro_plat_mutex_unlock(&rt->act_lock);
 
+    for (;;) {
     coro_status st = coro_yield();
     if (st != CORO_OK) {
         /* Cancelled before or at the park: the yield consumed the request
@@ -556,7 +677,37 @@ coro_status coro_rt_join(coro_rt_t* rt, coro_t* c) {
         coro_plat_mutex_unlock(&rt->act_lock);
         return ret;
     }
-    return CORO_OK;
+    {
+        /* BT genuineness: the retire walk unlinks a waiter before waking it;
+           still being linked means a stale delivery resumed us, so re-park. */
+        int still = 0;
+        coro_plat_mutex_lock(&rt->act_lock);
+        if (node_test(target, RT_DONE) || coro_get_state(c) == CORO_DEAD) {
+            coro_plat_mutex_unlock(&rt->act_lock);
+            return CORO_OK;
+        }
+        {
+            rt_node** p = &target->waiter_next;
+            while (*p) {
+                if (*p == self) {
+                    *p = self->waiter_next;
+                    self->waiter_next = NULL;
+                    still = 1;
+                    break;
+                }
+                p = &(*p)->waiter_next;
+            }
+        }
+        if (still) {
+            self->waiter_next = target->waiter_next;
+            target->waiter_next = self;
+            node_set(self, RT_WAITING);
+            node_set(self, RT_PARKED);
+        }
+        coro_plat_mutex_unlock(&rt->act_lock);
+        if (!still) return CORO_OK;
+    }
+    }
 }
 
 size_t coro_rt_pending(const coro_rt_t* rt) {
@@ -571,30 +722,34 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
     if (!n) return CORO_ESTALE; /* not inside a runtime-scheduled coroutine */
 
     n->timer.deadline = deadline;
-    node_set(n, RT_WAITING);
-    node_set(n, RT_PARKED);
-    /* The heap belongs to the worker driving us; it is the only writer. */
-    coro_timer_heap_push(&n->worker->sleepers, &n->timer);
-    coro_status st = coro_yield();
-    if (st != CORO_OK) {
-        /* Cancelled at the park's safe point. The heap removal below is
-           unconditional and owner-safe: coro_timer_heap_remove refuses a
-           node that is not a member of the heap (a checked no-op,
-           timer.c:128), and a node that IS a member sits in this worker's
-           heap, whose only writer is the thread running this coroutine
-           (the yield never switched out on this path). Only the pre-park
-           cancellation can find the entry here; taking the deadline out
-           matters then, or the heap would fire it later and drive this
-           node a second time -- after it moved on, possibly after it was
-           freed. On a path that did switch out, the driver settle or the
-           releaser already retired the markers, and repeating the clears
-           is idempotent. The bits go too, for the same reason the other
-           park sites clear them. */
+    for (;;) {
+        node_set(n, RT_WAITING);
+        node_set(n, RT_PARKED);
+        node_set(n, RT_TIMED);
+        (void)rt_pending_requeue(n);   /* round-5: park consumes pending */
+        /* The heap belongs to the worker driving us; it is the only writer. */
+        coro_timer_heap_push(&n->worker->sleepers, &n->timer);
+        coro_status st = coro_yield();
+        node_clear(n, RT_TIMED);
+        if (st != CORO_OK) {
+            /* Cancelled at the park's safe point: take the deadline out and
+               retire the markers (checked no-op when the entry is gone). */
+            coro_timer_heap_remove(&n->worker->sleepers, &n->timer);
+            node_clear(n, RT_WAITING);
+            node_clear(n, RT_PARKED);
+            return st;
+        }
+        /* BT genuineness: a stale delivery can resume the sleep early; only
+           a passed deadline makes the sleep complete. */
+        if (coro_monotonic_ns() >= deadline) {
+            node_clear(n, RT_WAITING);
+            node_clear(n, RT_PARKED);
+            return CORO_OK;
+        }
         coro_timer_heap_remove(&n->worker->sleepers, &n->timer);
         node_clear(n, RT_WAITING);
         node_clear(n, RT_PARKED);
     }
-    return st;
 }
 
 coro_status coro_rt_yield(void) {
@@ -616,12 +771,20 @@ coro_status coro_rt_cancel(coro_rt_t* rt, coro_t* c) {
        node's self-loop, n->next == n, hands it out over and over). */
     uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
     for (;;) {
-        if (!(cur & RT_WAITING) || (cur & RT_WAKE_REQ)) return CORO_OK;
+        /* BT: only a deadline park is requeued by cancellation (sync parks
+           keep observing the request at their next releaser wake). */
+        if (!(cur & RT_WAITING) || !(cur & RT_TIMED) || (cur & RT_WAKE_REQ)) {
+            return CORO_OK;
+        }
         uint64_t exp = cur;
         if (coro_at_cas((volatile uint64_t*)&n->flags, &exp,
                         cur | RT_WAKE_REQ)) {
-            mpsc_push(&n->worker->inbox, n);
-            signal_activity(rt);
+            if (rt_queue_claim(n)) {
+                mpsc_push(&n->worker->inbox, n);
+                signal_activity(rt);
+            } else {
+                node_clear(n, RT_WAKE_REQ); /* live delivery absorbs it */
+            }
             return CORO_OK;
         }
         cur = exp; /* lost: exp now holds the observed value */

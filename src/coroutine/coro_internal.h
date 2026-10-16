@@ -40,6 +40,16 @@ COROCC_API void coro_set_sched_tag(coro_t* c, void* tag);
 COROCC_API void* coro_get_sched_tag(const coro_t* c);
 
 /**
+ * coro_cancel_pending -- whether a cancellation request is outstanding.
+ *
+ * Read-only probe for the scheduler layer: a waiter with a pending request
+ * unwinds at its next safe point and can never take ownership, so a lock
+ * handoff must serve the next live waiter instead. The request itself is
+ * consumed only inside the coroutine layer.
+ */
+COROCC_API int coro_cancel_pending(const coro_t* c);
+
+/**
  * coro_create_on_stack -- create a coroutine around a caller-owned stack.
  *
  * The runtime's stack-reclaim pool hands back a stack retired earlier; this

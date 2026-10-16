@@ -285,6 +285,30 @@ coro_status coro_cancel(coro_t* c) {
     return CORO_OK;
 }
 
+/* F2 (round-8): expose the outstanding cancellation request to the scheduler
+   layer so a lock handoff can avoid evaporating the token on a cancel-bound
+   waiter. Semantics, explicitly:
+   - Internal only (coro_internal.h; not installed, not public ABI). Callers
+     pass a live handle they own for the duration of the call; the probe does
+     not dereference anything beyond cancel_req and never runs on a collected
+     or destroyed handle. Reading a DEAD coroutine is safe while the handle is
+     alive (the flag is just a leftover read as "cancel pending"); the scheduler
+     only ever probes handles of nodes it currently tracks.
+   - Racy by construction with take_cancellation (the coroutine layer's own
+     consume): a true read may already be consumed -- a false positive for the
+     handoff loop, which merely pops and serves one more waiter (harmless,
+     bounded); a false negative cannot happen after the scheduler observed a
+     parked waiter's state (the request is set before any resume can consume
+     it, and resume implies the pre-switch exit that the state check catches).
+   - Chain hygiene: a waiter that leaves its park (cancel branch, woken path)
+     unlinks itself via rt_detach before it can retire, so a stale chain entry
+     can never reference a freed node; the releaser's q_pop_wakeable unlinks
+     every node it serves, so the two never race on the same link.
+   Return: int, 1 when a request is outstanding, 0 otherwise. */
+int coro_cancel_pending(const coro_t* c) {
+    return c != NULL && coro_at_load((volatile uint64_t*)&c->cancel_req) != 0;
+}
+
 coro_status coro_join(coro_t* c) {
     if (!c) return CORO_EINVAL;
     /* Manual mode has no scheduler to park the caller in, and the zero-spin

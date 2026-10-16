@@ -64,6 +64,10 @@ typedef struct rt_worker rt_worker;
 #define RT_DONE      (1u << 3)
 #define RT_WAKE_REQ  (1u << 4)
 #define RT_PARKED    (1u << 5)
+#define RT_TIMED     (1u << 6)  /* BT: only a deadline park carries it */
+#define RT_QUEUED    (1u << 7)  /* BT: one live delivery reference per node */
+#define RT_DYING     (1u << 8)  /* BT: retire is purging the node's queues */
+#define RT_WAKE_PENDING (1u << 9) /* BT: a collapsed wake is still owed a drive */
 
 struct rt_node {
     struct rt_node* next;         /**< MPSC inbox link. */
@@ -98,7 +102,17 @@ struct rt_worker {
  * raises the activity signal so an idle worker notices. Only the chain owner
  * may call this; the node must be off any chain when it returns.
  */
-void rt_node_wake(coro_rt_t* rt, rt_node* n);
+/* Returns 1 when the wake was delivered (pushed or collapsed into a
+   live delivery), 0 when the node refused it (retired/dying, or no
+   longer waiting): a releaser must then hand its wake to the next
+   waiter instead of letting it evaporate on the node. */
+int rt_node_wake(coro_rt_t* rt, rt_node* n);
+
+/* Consume a collapsed wake's pending drive at a park publication: if
+   RT_WAKE_PENDING is set, clear it and re-arm the drive into the owner
+   worker's inbox (the owner is the current driver, so it drains right
+   after this drive). Returns 1 when a drive was re-armed. */
+int rt_pending_requeue(rt_node* n);
 
 /* The type name coro_rt_t lives in the public header <corocc/coro_rt.h>
    (typedef struct coro_rt coro_rt_t, line 40), included above; repeating the
