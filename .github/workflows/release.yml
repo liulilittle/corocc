@@ -35,6 +35,8 @@ jobs:
           - { abi: ppc64le,      triple: powerpc64le-unknown-linux-gnu, toolchain: scripts/toolchains/ppc64le.cmake, apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
           - { abi: s390x,        triple: s390x-unknown-linux-gnu, toolchain: scripts/toolchains/s390x.cmake, apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
           - { abi: riscv64,      triple: riscv64-unknown-linux-gnu, toolchain: scripts/toolchains/riscv64.cmake, apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
+          - { abi: loongarch64,  triple: loongarch64-unknown-linux-gnu, toolchain: scripts/toolchains/loongarch64.cmake, apt: "gcc-13-loongarch64-linux-gnu g++-13-loongarch64-linux-gnu libc6-dev-loong64-cross", assets: "" }
+          - { abi: sparc64,      triple: sparc64-unknown-linux-gnu, toolchain: scripts/toolchains/sparc64.cmake, apt: "gcc-13-sparc64-linux-gnu g++-13-sparc64-linux-gnu libc6-dev-sparc64-cross", assets: "" }
           # --- prebuilt toolchain-v1 release assets: sha256-verified fetch into
           #     /opt before the build (assets: = asset triple) ---
           - { abi: aarch64_be, triple: aarch64_be-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64_be.cmake, apt: "gcc-aarch64-linux-gnu", assets: "aarch64_be-linux-gnu" }

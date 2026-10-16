@@ -88,6 +88,8 @@ if [ "${SKIP_CROSS:-0}" != "1" ]; then
         "ppc64le|scripts/toolchains/ppc64le.cmake|powerpc64le-linux-gnu-gcc"
         "s390x|scripts/toolchains/s390x.cmake|s390x-linux-gnu-gcc"
         "riscv64|scripts/toolchains/riscv64.cmake|riscv64-linux-gnu-gcc"
+        "loongarch64|scripts/toolchains/loongarch64.cmake|loongarch64-linux-gnu-gcc-13"
+        "sparc64|scripts/toolchains/sparc64.cmake|sparc64-linux-gnu-gcc-13"
         "aarch64_be|scripts/toolchains/aarch64_be.cmake|/opt/corocc-toolchain/aarch64_be-linux-gnu/bin/aarch64_be-linux-gnu-gcc"
         "armeb|scripts/toolchains/armeb.cmake|/opt/corocc-toolchain/armeb-linux-gnueabi/bin/armeb-linux-gnueabi-gcc"
         "riscv32|scripts/toolchains/riscv32.cmake|/opt/corocc-toolchain/riscv32-linux-gnu/bin/riscv32-linux-gnu-gcc"

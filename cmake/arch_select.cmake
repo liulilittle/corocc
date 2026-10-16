@@ -27,6 +27,8 @@
 #   s390x          s390x_sysv_elf_gas.S               big
 #   riscv64        riscv64_sysv_elf_gas.S             little
 #   riscv32        riscv32_sysv_elf_gas.S             little (adapted from riscv64)
+#   loongarch64    loongarch64_sysv_elf_gas.S         little
+#   sparc64        sparc64_sysv_elf_gas.S             big
 #
 # When COROCC_ABI is unset (plain native builds), the historical heuristics
 # are kept: MSVC x64 -> PE/MASM, x86_64 -> SysV ELF, aarch64 -> AAPCS.
@@ -49,6 +51,8 @@ set(COROCC_ABI_ppc64le     "src/arch/ppc64_sysv_elf_gas.S")
 set(COROCC_ABI_s390x       "src/arch/s390x_sysv_elf_gas.S")
 set(COROCC_ABI_riscv64     "src/arch/riscv64_sysv_elf_gas.S")
 set(COROCC_ABI_riscv32     "src/arch/riscv32_sysv_elf_gas.S")
+set(COROCC_ABI_loongarch64 "src/arch/loongarch64_sysv_elf_gas.S")
+set(COROCC_ABI_sparc64     "src/arch/sparc64_sysv_elf_gas.S")
 
 function(corocc_use_ms_pe_backend)
     # Windows x64: the PE/MASM context-switch backend (Boost.Context ms_pe,

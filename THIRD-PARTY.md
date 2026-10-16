@@ -26,9 +26,18 @@ The origin, version, and license of each are recorded below.
     adaptation of `riscv64_sysv_elf_gas.S` from the same Boost 1.83.0 release
     (LP64 register frame reworked to an ILP32D 0xa0-byte frame); the BSL-1.0
     attribution is kept in the file header.
+  - `loongarch64_sysv_elf_gas.S` (loongarch64 SysV ELF, little-endian) -
+    from Boost.Context 1.92.0 (see the version note below).
+  - `sparc64_sysv_elf_gas.S` (sparc64 SysV ELF, big-endian) - from
+    Boost.Context 1.92.0 (see the version note below); Copyright
+    Claudio Jeker 2024, kept verbatim.
 - **Upstream project:** Boost.Context (part of Boost).
 - **Version:** 1.83.0 (tag `boost-1.83.0`, commit
-  `65b179db288d13da21447e4f430400338ce08ca2`).
+  `65b179db288d13da21447e4f430400338ce08ca2`) for all files above except the
+  two marked otherwise; the loongarch64 and sparc64 backends are from 1.92.0
+  (tag `boost-1.92.0`, commit `cc1b9e02cd530d6607becc984e1e5bfa4f7b3600`,
+  the newest release at vendoring time; the sparc64 files differ from 1.87.0
+  only by a comment spelling fix).
 - **License:** Boost Software License 1.0 (BSL-1.0).
   Full text: <https://www.boost.org/LICENSE_1_0.txt>
 - **Compatibility:** BSL-1.0 is a permissive, OSI-approved license that is

@@ -44,6 +44,8 @@ TARGETS=(
   "s390x|scripts/toolchains/s390x.cmake"
   "riscv64|scripts/toolchains/riscv64.cmake"
   "riscv32|scripts/toolchains/riscv32.cmake"
+  "loongarch64|scripts/toolchains/loongarch64.cmake"
+  "sparc64|scripts/toolchains/sparc64.cmake"
 )
 
 pass=0; fail=0

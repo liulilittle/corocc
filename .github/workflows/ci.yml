@@ -152,6 +152,8 @@ jobs:
           - { abi: ppc64le,      toolchain: scripts/toolchains/ppc64le.cmake,  apt: "gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu", assets: "" }
           - { abi: s390x,        toolchain: scripts/toolchains/s390x.cmake,    apt: "gcc-s390x-linux-gnu g++-s390x-linux-gnu", assets: "" }
           - { abi: riscv64,      toolchain: scripts/toolchains/riscv64.cmake,  apt: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu", assets: "" }
+          - { abi: loongarch64,  toolchain: scripts/toolchains/loongarch64.cmake, apt: "gcc-13-loongarch64-linux-gnu g++-13-loongarch64-linux-gnu libc6-dev-loong64-cross", assets: "" }  # versioned drivers only; libc headers come from libc6-dev-loong64-cross (Recommends, dropped by --no-install-recommends)
+          - { abi: sparc64,      toolchain: scripts/toolchains/sparc64.cmake,  apt: "gcc-13-sparc64-linux-gnu g++-13-sparc64-linux-gnu libc6-dev-sparc64-cross", assets: "" }  # versioned drivers only; libc headers from libc6-dev-sparc64-cross
           # --- prebuilt toolchain-v1 assets: fetch-toolchain-assets.sh verifies
           #     the sha256 ledger (ci/toolchain-assets.sha256) and unpacks into
           #     /opt before the build; the assets: value is the asset triple ---
