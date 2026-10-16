@@ -16,6 +16,9 @@ The origin, version, and license of each are recorded below.
   - `i386_ms.asm` (32-bit x86 PE/MASM, Windows MSVC) - from Boost.Context
     1.92.0 (see the version note below); Copyright Oliver Kowalke 2009,
     kept verbatim.
+  - `arm64_ms.asm` (Windows ARM64 PE, armasm64) - from Boost.Context
+    1.92.0 (see the version note below); Copyright Edward Nevill +
+    Oliver Kowalke 2015, kept verbatim.
   - `arm64_aapcs_elf_gas.S` (aarch64 AAPCS; little- and big-endian)
   - `i386_sysv_elf_gas.S` (i386 SysV ELF)
   - `arm_aapcs_elf_gas.S` (arm32 AAPCS; little- and big-endian)
@@ -41,8 +44,8 @@ The origin, version, and license of each are recorded below.
 - **Upstream project:** Boost.Context (part of Boost).
 - **Version:** 1.83.0 (tag `boost-1.83.0`, commit
   `65b179db288d13da21447e4f430400338ce08ca2`) for all files above except the
-  five marked otherwise; the loongarch64, sparc64, both Mach-O and the 32-bit
-  Windows backends are from 1.92.0 (tag `boost-1.92.0`, commit
+  six marked otherwise; the loongarch64, sparc64, both Mach-O, the 32-bit
+  and the ARM64 Windows backends are from 1.92.0 (tag `boost-1.92.0`, commit
   `cc1b9e02cd530d6607becc984e1e5bfa4f7b3600`, the newest release at
   vendoring time; the sparc64 files differ from 1.87.0 only by a comment
   spelling fix).

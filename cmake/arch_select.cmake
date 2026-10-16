@@ -11,6 +11,7 @@
 #   x86_64_sysv    x86_64_sysv_elf_gas.S              -
 #   x86_64_ms      x86_64_ms.asm (MSVC MASM, ml64)     -
 #   i386_ms        i386_ms.asm (MSVC MASM, ml)         -
+#   arm64_ms       arm64_ms.asm (MSVC armasm64)        -
 #   i386_sysv      i386_sysv_elf_gas.S                -
 #   aarch64        arm64_aapcs_elf_gas.S              little
 #   aarch64_be     arm64_aapcs_elf_gas.S              big
@@ -61,10 +62,22 @@ set(COROCC_ABI_sparc64     "src/arch/sparc64_sysv_elf_gas.S")
 set(COROCC_ABI_x86_64_macho "src/arch/x86_64_sysv_macho_gas.S")
 set(COROCC_ABI_arm64_macho  "src/arch/arm64_aapcs_macho_gas.S")
 
+function(corocc_use_ms_pe_armasm_backend asm_file)
+    # Windows ARM64: the PE/armasm64 context-switch backend (Boost.Context
+    # arm64_aapcs_pe_armasm, vendored as src/arch/arm64_ms.asm). CMake's
+    # ASM_MARMASM language drives armasm64 through its default rule
+    # (armasm64 <INCLUDES> <FLAGS> -o <OBJECT> <SOURCE>), which needs no
+    # override here: the directory-level warning flags are scoped to C/CXX
+    # only, and the Visual Studio generator drives the toolset's armasm64
+    # through the armasm build customization.
+    enable_language(ASM_MARMASM)
+    target_sources(corocc PRIVATE ${asm_file})
+endfunction()
+
 function(corocc_use_ms_pe_backend asm_file)
-    # Windows (MSVC): the PE/MASM context-switch backend (Boost.Context
-    # ms_pe, vendored under src/arch/). x64 uses ml64 via x86_64_ms.asm;
-    # the 32-bit target uses ml via i386_ms.asm. MinGW and other Windows
+    # Windows x64/x86: the PE/MASM context-switch backend (Boost.Context
+    # ms_pe, vendored under src/arch/). x64 uses ml64 via x86_64_ms.asm; the
+    # 32-bit target uses ml via i386_ms.asm. MinGW and other Windows
     # toolchains are outside the supported scope (MSVC only).
     enable_language(ASM_MASM)
     # The directory-level /W4 /WX are C/C++ warning flags; ml64/ml reject an
@@ -105,6 +118,11 @@ if (DEFINED COROCC_ABI)
             message(FATAL_ERROR "corocc: COROCC_ABI=i386_ms requires MSVC (MASM backend)")
         endif()
         corocc_use_ms_pe_backend(src/arch/i386_ms.asm)
+    elseif (corocc_abi_lc STREQUAL "arm64_ms")
+        if (NOT MSVC)
+            message(FATAL_ERROR "corocc: COROCC_ABI=arm64_ms requires MSVC (armasm64 backend)")
+        endif()
+        corocc_use_ms_pe_armasm_backend(src/arch/arm64_ms.asm)
     else()
         set(corocc_asm "${COROCC_ABI_${corocc_abi_lc}}")
         if (corocc_asm STREQUAL "")
@@ -117,6 +135,11 @@ if (DEFINED COROCC_ABI)
         endif()
         target_sources(corocc PRIVATE ${corocc_asm})
     endif()
+elseif (MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 8) AND (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64"))
+    # Windows ARM64: the armasm64 backend. The processor probe is what tells
+    # the two 64-bit Windows targets apart (the x64 toolsets report
+    # AMD64/x86_64; the ARM64 platform reports ARM64/aarch64).
+    corocc_use_ms_pe_armasm_backend(src/arch/arm64_ms.asm)
 elseif (MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 8))
     # Pointer width decides the backend: an x64 toolset builds the ml64
     # backend even when CMAKE_SYSTEM_PROCESSOR names the host, and a Win32

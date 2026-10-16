@@ -55,8 +55,11 @@
 - **LP64**(Linux 与 macOS、多数 Unix 64 位):指针、`size_t`、`long` 均为
   8 字节。macOS x86_64 与 Apple Silicon arm64 均为 LP64,故下方 64 位布局表
   原样适用(与 LLP64 同理,原因相同:公开字段不使用 `long`)。
-- **LLP64**(64 位 Windows):指针与 `size_t` 为 8 字节,`long` 为 4 字节——
-  公开字段不使用 `long`,因此 **LLP64 与 LP64 布局完全一致**。
+- **LLP64**(64 位 Windows,x64 与 ARM64):指针与 `size_t` 为 8 字节,`long`
+  为 4 字节——
+  公开字段不使用 `long`,因此 **LLP64 与 LP64 布局完全一致**。Windows ARM64
+  同为 LLP64,遵循同一张 64 位表(CI 的 windows-arm64 任务在 ARM64 主机上
+  运行全量套件)。
 - **ILP32,`uint64_t` 8 字节对齐**(ARM EABI、MIPS o32、Win32 MSVC):指针与
   `size_t` 为 4 字节;`uint64_t` 为 8 字节、对齐 8。已在 armhf、mips o32 与
   Windows x86 实测;其余 32 位 ARM/MIPS/riscv 目标遵循同一规则。MSVC x86

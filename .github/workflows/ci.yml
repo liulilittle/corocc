@@ -290,6 +290,26 @@ jobs:
           cmake --build build --config Debug --parallel 2
       - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
 
+  windows-arm64:
+    # Windows on ARM64 native site. The `windows-11-arm` label migrated to
+    # the VS2026 image (18.x) by 2026-09-30 (GitHub changelog 2026-08-20),
+    # so this job asks CMake for the `Visual Studio 18 2026` generator
+    # (added in CMake 4.2; the image ships 4.4.x) and targets the ARM64
+    # platform. Backend: src/arch/arm64_ms.asm (Boost.Context
+    # arm64_aapcs_pe_armasm, assembled by armasm64 through CMake's
+    # ASM_MARMASM language). The runner is an ARM64 host, so the Release
+    # ctest suite runs natively. Shape mirrors windows-msvc/windows-x86
+    # (Debug build-only for the documented CrtDbgReportW reason).
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -G "Visual Studio 18 2026" -A ARM64
+      - run: |
+          cmake --build build --config Release --parallel 2
+          cmake --build build --config Debug --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
+
   ndk:
     name: ndk ${{ matrix.android_abi }}
     runs-on: ubuntu-24.04
@@ -333,7 +353,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, macos-x64, macos-arm64, windows-x86, ndk]
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, asio-host-example, cross, windows-msvc, macos-x64, macos-arm64, windows-x86, windows-arm64, ndk]
     # NOTE: perf-report is intentionally NOT in needs (non-required).
     runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
     timeout-minutes: 5
@@ -355,6 +375,7 @@ jobs:
           R_MACOS_X64: ${{ needs.macos-x64.result }}
           R_MACOS_ARM64: ${{ needs.macos-arm64.result }}
           R_WINDOWS_X86: ${{ needs.windows-x86.result }}
+          R_WINDOWS_ARM64: ${{ needs.windows-arm64.result }}
           R_NDK: ${{ needs.ndk.result }}
         run: |
           set -u
@@ -381,5 +402,6 @@ jobs:
           report macos-x64       "$R_MACOS_X64"
           report macos-arm64     "$R_MACOS_ARM64"
           report windows-x86     "$R_WINDOWS_X86"
+          report windows-arm64   "$R_WINDOWS_ARM64"
           report ndk             "$R_NDK"
           exit "$fail"

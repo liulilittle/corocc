@@ -12,7 +12,7 @@ entry points live in [building.md](building.md).
 
 | Axis | Supported |
 | --- | --- |
-| Operating systems | Linux (glibc), Windows (x64 and x86), macOS (x86_64 and Apple Silicon arm64), Android (compile and link; NDK r26+) |
+| Operating systems | Linux (glibc), Windows (x64, x86 and ARM64), macOS (x86_64 and Apple Silicon arm64), Android (compile and link; NDK r26+) |
 | Compilers | GCC and Clang (the Ubuntu 24.04 toolchains — GCC 13 / Clang 18 — in CI and local runs), MSVC (Visual Studio 2022, `/W4 /WX`), Apple clang (Xcode, CI macOS runners) |
 | Library language | C99 (headers compile as C99 and C++11) |
 | Wrapper language | C++11 (verified through C++20 as a forward check; MSVC baseline `/std:c++14`) |
@@ -34,6 +34,7 @@ Native targets:
 | `x86_64-unknown-linux-gnu` | x86-64 SysV ELF | LP64 | CI native jobs (GCC + Clang) and full suite locally |
 | `x86_64-pc-windows-msvc` | x86-64 PE (MASM backend) | LLP64 | CI Windows job and full suite locally |
 | Windows x86 (`windows-x86` job) | x86 PE (MASM backend, ml.exe) | ILP32, 8-byte `uint64_t` | CI x86 job (VS2022 Win32); the 32-bit binaries run natively on the x64 runner through WoW64, full suite |
+| Windows ARM64 (`windows-arm64` job) | ARM64 PE (armasm64 backend) | LLP64 (layout-identical to the 64-bit table) | CI ARM64 job (VS2026, ARM64 runner); full suite runs natively on the ARM64 host |
 | macOS x86_64 (`macos-x64` job) | x86-64 Mach-O | LP64 | CI macOS x64 job (Apple clang, full suite) |
 | macOS arm64 (`macos-arm64` job) | aarch64 Mach-O | LP64 | CI macOS arm64 job (Apple clang, full suite) |
 
@@ -124,6 +125,7 @@ push and pull request:
 | `cross` (20 jobs) | One job per cross ABI: build with the cross toolchain and run the CTest suite under the matching `qemu-user`. |
 | `windows-msvc` | Visual Studio 2022 x64 build (Debug + Release) and the Release test suite. |
 | `windows-x86` | Visual Studio 2022 Win32 (x86) build (Debug + Release) and the Release test suite; the 32-bit binaries run natively on the x64 runner. |
+| `windows-arm64` | Visual Studio 2026 ARM64 build (Debug + Release) and the Release test suite on the `windows-11-arm` runner (ARM64 host, VS2026 image since the 2026-09 migration). |
 | `macos-x64`, `macos-arm64` | Native macOS builds (Apple clang) and the full Release test suite on Intel (`macos-15-intel`) and Apple Silicon (`macos-15`). |
 | `ndk` (2 jobs) | Android NDK compile+link for `arm64-v8a` and `x86_64`. |
 | `ci-summary` | Aggregates the jobs; a skipped job fails the summary unless explicitly whitelisted. |

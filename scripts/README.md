@@ -103,7 +103,8 @@ verifies them against `ci/toolchain-assets.sha256` and unpacks them under
 All 20 cross-target context-switch backends are vendored under `src/arch/` and
 wired into the build; `scripts/build-all.sh` builds and runs each of them under
 the matching qemu-user emulator with the population-floor assertion enforced
-(C and C++ suites alike). Windows (MSVC x64/x86, PE/MASM backends) is
+(C and C++ suites alike). Windows (MSVC x64/x86, PE/MASM backends, and
+ARM64, armasm64 backend) is
 covered by
 native Windows builds; macOS x86_64 and arm64 (Mach-O backends) are covered by
 native macOS builds -- both without toolchain files.

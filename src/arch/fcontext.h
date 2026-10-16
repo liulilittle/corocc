@@ -22,6 +22,8 @@
 /* macOS x86_64 (x86_64_sysv_macho_gas.S): fctx in RAX, data in RDX. */
 #elif defined(__APPLE__) && defined(__aarch64__)
 /* macOS arm64 (arm64_aapcs_macho_gas.S): fctx in X0, data in X1. */
+#elif defined(_M_ARM64)
+/* Windows ARM64 (arm64_ms.asm): fctx in X0, data in X1. */
 #elif defined(__x86_64__)
 /* x86_64 SysV ELF (x86_64_sysv_elf_gas.S): fctx in RAX, data in RDX. */
 #elif defined(__aarch64__)

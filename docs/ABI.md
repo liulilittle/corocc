@@ -65,9 +65,12 @@ distinct layouts:
   `long` are 8 bytes. macOS x86_64 and Apple Silicon arm64 are LP64, so the
   64-bit layout table below applies to them unchanged (like LLP64, and for
   the same reason: no public field uses `long`).
-- **LLP64** (64-bit Windows): pointers and `size_t` are 8 bytes, `long` is
+- **LLP64** (64-bit Windows, x64 and ARM64): pointers and `size_t` are
+  8 bytes, `long` is
   4 bytes — no public field uses `long`, so **LLP64 is layout-identical to
-  LP64**.
+  LP64**. The Windows ARM64 target is LLP64 as well, so it follows the same
+  64-bit table (the CI windows-arm64 job runs the full suite on the ARM64
+  host).
 - **ILP32, 8-byte `uint64_t` alignment** (ARM EABI, MIPS o32, Win32
   MSVC): pointers and `size_t` are 4 bytes; `uint64_t` is 8 bytes aligned
   to 8. Measured on the armhf, mips o32 and Windows x86 targets; the

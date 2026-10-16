@@ -344,12 +344,17 @@ static inline void coro_at_fence(void) {
        documented full barrier (winnt.h's MemoryBarrier expands to the same
        pair); on x86 (MSVC ml/cl, _M_IX86) that intrinsic does not exist and
        _mm_mfence() -- SSE2, the x86 MSVC default -- is the equivalent full
-       barrier with StoreLoad included. The x64 codegen was verified
+       barrier with StoreLoad included; on Windows ARM64 the spelling is
+       __dmb(_ARM64_BARRIER_SY), the architected full system barrier (MSVC
+       ARM64 has no __faststorefence). The x64 codegen was verified
        (fence_probe): lock or dword ptr [rsp],0 -- a full barrier; the x86
-       path is verified by the Windows x86 CI job. */
+       path is verified by the Windows x86 CI job and the ARM64 path by the
+       Windows ARM64 CI job. */
     _ReadWriteBarrier();
 #if defined(_M_X64)
     __faststorefence();
+#elif defined(_M_ARM64)
+    __dmb(_ARM64_BARRIER_SY);
 #else /* _M_IX86: _mm_mfence */
     _mm_mfence();
 #endif

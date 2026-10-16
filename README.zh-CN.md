@@ -16,21 +16,21 @@
 | 领域 | 能力 |
 | --- | --- |
 | 分层 | L0 上下文原语(`coro_stack`、`coro_ctx`)、L1 协程对象(供 token 凭证协议)、L2 M:N 工作窃取运行时(含互斥锁、条件变量、计数信号量、读写锁、通道等同步原语)、L3 结构化并发 scope 层、单线程调度器,以及 header-only 的 C++11 封装(`coro.hpp`) |
-| 架构 | 原生 x86_64(SysV ELF、MSVC PE/MASM 与 Mach-O)、原生 Windows x86(MSVC PE/MASM)与 macOS arm64,另有 20 个交叉编译 ABI:i386、aarch64/aarch64_be、arm32/armeb/armel(armel 为软浮点 EABI)、MIPS o32/n32/n64 双端序、ppc32/ppc64/ppc64le、s390x、riscv32/riscv64、loongarch64、sparc64;每个交叉 ABI 都在 QEMU 用户态模拟下构建并运行完整测试 |
+| 架构 | 原生 x86_64(SysV ELF、MSVC PE/MASM 与 Mach-O)、原生 Windows x86 与 ARM64(MSVC PE/MASM 与 armasm64)及 macOS arm64,另有 20 个交叉编译 ABI:i386、aarch64/aarch64_be、arm32/armeb/armel(armel 为软浮点 EABI)、MIPS o32/n32/n64 双端序、ppc32/ppc64/ppc64le、s390x、riscv32/riscv64、loongarch64、sparc64;每个交叉 ABI 都在 QEMU 用户态模拟下构建并运行完整测试 |
 | 守护页 | 每个协程栈映射一个 `PROT_NONE` 守护页,溢出即触发缺页而不是破坏相邻内存 |
 | 消毒器 | ASan fiber-switch 钩子(`COROCC_ASAN`),含栈用后即返回检测;ThreadSanitizer 套件覆盖运行时的投递队列、身份注册表与原子操作 |
 | 与 Boost 共存 | 重命名符号后的汇编可与真实 Boost.Context 同进程链接(`boost_coexist` 测试);可选的 header-only Boost.Asio 集成让套接字在协程内呈现阻塞形态 |
-| 工具链 | GCC / Clang / MSVC(x64 与 x86)/ Apple clang(macOS x86_64/arm64),以及基于 CMake toolchain 文件的交叉编译;支持 Android NDK 编译链接 |
+| 工具链 | GCC / Clang / MSVC(x64/x86/ARM64)/ Apple clang(macOS x86_64/arm64),以及基于 CMake toolchain 文件的交叉编译;支持 Android NDK 编译链接 |
 | 分发 | 每个 tag 发布按三元组打包的预编译静态库归档,内含 CMake config 包与零依赖消费示例 |
 
 ## 平台支持一览
 
 | 维度 | 支持范围 |
 | --- | --- |
-| 操作系统 | Linux(glibc)、Windows x64 与 x86、macOS x86_64 与 arm64(Apple Silicon)、Android(NDK,编译+链接) |
-| 编译器 | GCC、Clang、MSVC(VS2022,x64 与 x86)、Apple clang |
+| 操作系统 | Linux(glibc)、Windows x64/x86/ARM64、macOS x86_64 与 arm64(Apple Silicon)、Android(NDK,编译+链接) |
+| 编译器 | GCC、Clang、MSVC(VS2022 x64/x86、VS2026 ARM64)、Apple clang |
 | 语言 | C99 库;C++11 封装与可选头 |
-| ISA 目标 | x86_64(SysV ELF + MSVC PE + macOS Mach-O)、i386(SysV ELF 与 32 位 Windows MSVC PE)、aarch64(含 BE,含 macOS arm64)、armv7 硬浮点(含 BE)与 armv5t 软浮点(armel)、MIPS o32/n32/n64(含 LE)、ppc32/ppc64/ppc64le、s390x、riscv32/riscv64、loongarch64、sparc64 |
+| ISA 目标 | x86_64(SysV ELF + MSVC PE + macOS Mach-O)、i386(SysV ELF 与 32 位 Windows MSVC PE)、aarch64(含 BE,含 macOS arm64 与 Windows ARM64)、armv7 硬浮点(含 BE)与 armv5t 软浮点(armel)、MIPS o32/n32/n64(含 LE)、ppc32/ppc64/ppc64le、s390x、riscv32/riscv64、loongarch64、sparc64 |
 
 完整矩阵(含逐目标 CI 任务、模拟器运行器与已知边界)见
 [docs/platforms.zh-CN.md](docs/platforms.zh-CN.md)。
