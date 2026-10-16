@@ -26,6 +26,8 @@
 /* x86_64 SysV ELF (x86_64_sysv_elf_gas.S): fctx in RAX, data in RDX. */
 #elif defined(__aarch64__)
 /* aarch64 AAPCS ELF (arm64_aapcs_elf_gas.S): fctx in X0, data in X1. */
+#elif defined(_M_IX86)
+/* Win32 MSVC (i386_ms.asm): the pair returns in EDX:EAX, fctx in EAX. */
 #else
 /* Other vendored ELF backends: the pair is returned in that ABI's standard
    two-register aggregate slots, matched by the C prototype below. */

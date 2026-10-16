@@ -9,7 +9,8 @@
 #   COROCC_ABI     backend                            endianness
 #   ------------   --------------------------------   -----------------------
 #   x86_64_sysv    x86_64_sysv_elf_gas.S              -
-#   x86_64_ms      x86_64_ms.asm (MSVC MASM)          -
+#   x86_64_ms      x86_64_ms.asm (MSVC MASM, ml64)     -
+#   i386_ms        i386_ms.asm (MSVC MASM, ml)         -
 #   i386_sysv      i386_sysv_elf_gas.S                -
 #   aarch64        arm64_aapcs_elf_gas.S              little
 #   aarch64_be     arm64_aapcs_elf_gas.S              big
@@ -33,8 +34,9 @@
 #   arm64_macho    arm64_aapcs_macho_gas.S            (macOS)
 #
 # When COROCC_ABI is unset (plain native builds), the historical heuristics
-# are kept: MSVC x64 -> PE/MASM, x86_64 -> SysV ELF, aarch64 -> AAPCS; on
-# Apple hosts the same x86_64/aarch64 probes select the Mach-O backends.
+# are kept: MSVC pointer width selects the PE/MASM backend (ml64 at 8 bytes,
+# ml at 4 bytes), x86_64 -> SysV ELF, aarch64 -> AAPCS; on Apple hosts the
+# same x86_64/aarch64 probes select the Mach-O backends.
 
 set(COROCC_ABI_x86_64_sysv "src/arch/x86_64_sysv_elf_gas.S")
 set(COROCC_ABI_i386_sysv   "src/arch/i386_sysv_elf_gas.S")
@@ -59,20 +61,36 @@ set(COROCC_ABI_sparc64     "src/arch/sparc64_sysv_elf_gas.S")
 set(COROCC_ABI_x86_64_macho "src/arch/x86_64_sysv_macho_gas.S")
 set(COROCC_ABI_arm64_macho  "src/arch/arm64_aapcs_macho_gas.S")
 
-function(corocc_use_ms_pe_backend)
-    # Windows x64: the PE/MASM context-switch backend (Boost.Context ms_pe,
-    # vendored in src/arch/x86_64_ms.asm). MinGW and non-x64 Windows targets
-    # are outside the supported scope (MSVC x64 only).
+function(corocc_use_ms_pe_backend asm_file)
+    # Windows (MSVC): the PE/MASM context-switch backend (Boost.Context
+    # ms_pe, vendored under src/arch/). x64 uses ml64 via x86_64_ms.asm;
+    # the 32-bit target uses ml via i386_ms.asm. MinGW and other Windows
+    # toolchains are outside the supported scope (MSVC only).
     enable_language(ASM_MASM)
-    # The directory-level /W4 /WX are C/C++ warning flags; ml64 rejects an
+    # The directory-level /W4 /WX are C/C++ warning flags; ml64/ml reject an
     # invalid /W value with A4008 and /WX then turns that into a hard error.
     # MASM has its own warning model, so the ASM_MASM compile rule drops the
     # generic COMPILE_OPTIONS list; assembler flags can still be injected via
     # CMAKE_ASM_MASM_FLAGS.
+    #
+    # 32-bit only: /safeseh. The x86 MSVC linker validates SEH by default
+    # (SAFESEH), and an ml object without the marker is rejected with LNK2026
+    # ("module is unsafe for SAFESEH image"). /safeseh assembles the module
+    # under the "no exception handlers declared" contract, which is exactly
+    # this backend's position: it manipulates the SEH chain through the TIB
+    # at run time but defines no handler of its own. The flag lives in
+    # CMAKE_ASM_MASM_FLAGS: the Visual Studio generator does not read the
+    # CMAKE_ASM_MASM_COMPILE_OBJECT rule below, but it translates /safeseh
+    # from these flags into the MASM item's UseSafeExceptionHandlers (verified
+    # against the generated vcxproj), while the rule below expands
+    # ${CMAKE_ASM_MASM_FLAGS} for the Ninja/Makefile generators.
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(CMAKE_ASM_MASM_FLAGS "${CMAKE_ASM_MASM_FLAGS} /safeseh" PARENT_SCOPE)
+    endif()
     set(CMAKE_ASM_MASM_COMPILE_OBJECT
         "<CMAKE_ASM_MASM_COMPILER> <DEFINES> ${CMAKE_ASM_MASM_FLAGS} /c /Fo<OBJECT> <SOURCE>"
         PARENT_SCOPE)
-    target_sources(corocc PRIVATE src/arch/x86_64_ms.asm)
+    target_sources(corocc PRIVATE ${asm_file})
 endfunction()
 
 if (DEFINED COROCC_ABI)
@@ -81,7 +99,12 @@ if (DEFINED COROCC_ABI)
         if (NOT MSVC)
             message(FATAL_ERROR "corocc: COROCC_ABI=x86_64_ms requires MSVC (MASM backend)")
         endif()
-        corocc_use_ms_pe_backend()
+        corocc_use_ms_pe_backend(src/arch/x86_64_ms.asm)
+    elseif (corocc_abi_lc STREQUAL "i386_ms")
+        if (NOT MSVC)
+            message(FATAL_ERROR "corocc: COROCC_ABI=i386_ms requires MSVC (MASM backend)")
+        endif()
+        corocc_use_ms_pe_backend(src/arch/i386_ms.asm)
     else()
         set(corocc_asm "${COROCC_ABI_${corocc_abi_lc}}")
         if (corocc_asm STREQUAL "")
@@ -94,8 +117,13 @@ if (DEFINED COROCC_ABI)
         endif()
         target_sources(corocc PRIVATE ${corocc_asm})
     endif()
-elseif (MSVC AND (CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64"))
-    corocc_use_ms_pe_backend()
+elseif (MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 8))
+    # Pointer width decides the backend: an x64 toolset builds the ml64
+    # backend even when CMAKE_SYSTEM_PROCESSOR names the host, and a Win32
+    # toolset (-A Win32) builds the 32-bit ml backend.
+    corocc_use_ms_pe_backend(src/arch/x86_64_ms.asm)
+elseif (MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 4))
+    corocc_use_ms_pe_backend(src/arch/i386_ms.asm)
 elseif (APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
     target_sources(corocc PRIVATE src/arch/x86_64_sysv_macho_gas.S)
 elseif (APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))

@@ -57,9 +57,10 @@
   原样适用(与 LLP64 同理,原因相同:公开字段不使用 `long`)。
 - **LLP64**(64 位 Windows):指针与 `size_t` 为 8 字节,`long` 为 4 字节——
   公开字段不使用 `long`,因此 **LLP64 与 LP64 布局完全一致**。
-- **ILP32,`uint64_t` 8 字节对齐**(ARM EABI、MIPS o32):指针与 `size_t`
-  为 4 字节;`uint64_t` 为 8 字节、对齐 8。已在 armhf 与 mips o32 实测;
-  其余 32 位 ARM/MIPS/riscv 目标遵循同一对齐规则。
+- **ILP32,`uint64_t` 8 字节对齐**(ARM EABI、MIPS o32、Win32 MSVC):指针与
+  `size_t` 为 4 字节;`uint64_t` 为 8 字节、对齐 8。已在 armhf、mips o32 与
+  Windows x86 实测;其余 32 位 ARM/MIPS/riscv 目标遵循同一规则。MSVC x86
+  默认(`/Zp8`)保持 `__int64` 8 字节对齐,因此 Win32 归入本表而非 4 字节表。
 - **ILP32,`uint64_t` 4 字节对齐**(i386 SysV):指针与 `size_t` 为 4 字节;
   `uint64_t` 为 8 字节、对齐 4。适用于 i386 目标。四个纯指针结构体
   (`coro_stack`、`coro_ctx`、`coro_attr_t`、`coro_allocator_t`)与另一种
@@ -70,6 +71,7 @@
 | 站点 | 指针模型 | 结果 |
 | --- | --- | --- |
 | Windows x64,MSVC(`cl`,VS2022 17.x,`/W4 /WX`) | LLP64 | 与 LP64 表一致 |
+| Windows x86(Win32),MSVC(`cl`,VS2022 17.x,`/W4 /WX`) | ILP32,`uint64_t` 8 字节对齐 | 与第一张 ILP32 表一致 |
 | Linux x86-64,GCC 13 | LP64 | 基线 |
 | Linux aarch64,GCC 13 / `qemu-aarch64` | LP64 | 一致 |
 | Linux riscv64,GCC 13 / `qemu-riscv64` | LP64 | 一致 |

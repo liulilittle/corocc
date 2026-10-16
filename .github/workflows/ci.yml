@@ -252,6 +252,25 @@ jobs:
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build -E cpp_perf -j 2 --output-on-failure --timeout 300
 
+  windows-x86:
+    # Win32 (x86) target: the same VS2022 toolset as windows-msvc above,
+    # switching to the x86 cross toolset with `-A Win32`; the resulting
+    # 32-bit binaries run natively on the x64 runner through WoW64, so the
+    # full Release ctest suite executes (no emulator). Backend:
+    # src/arch/i386_ms.asm (Boost.Context i386 ms_pe MASM, ml.exe). The
+    # runner pin and the Debug build-only / Release-ctest split follow the
+    # windows-msvc job (the Debug ctest set is disabled there for the
+    # CrtDbgReportW modal-dialog reason documented above).
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
+      - run: |
+          cmake --build build --config Release --parallel 2
+          cmake --build build --config Debug --parallel 2
+      - run: ctest --test-dir build -C Release --output-on-failure --timeout 300
+
   ndk:
     name: ndk ${{ matrix.android_abi }}
     runs-on: ubuntu-24.04
@@ -295,7 +314,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, macos-x64, macos-arm64, ndk]
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, macos-x64, macos-arm64, windows-x86, ndk]
     # NOTE: perf-report is intentionally NOT in needs (non-required).
     runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
     timeout-minutes: 5
@@ -315,6 +334,7 @@ jobs:
           R_WINDOWS: ${{ needs.windows-msvc.result }}
           R_MACOS_X64: ${{ needs.macos-x64.result }}
           R_MACOS_ARM64: ${{ needs.macos-arm64.result }}
+          R_WINDOWS_X86: ${{ needs.windows-x86.result }}
           R_NDK: ${{ needs.ndk.result }}
         run: |
           set -u
@@ -339,5 +359,6 @@ jobs:
           report windows-msvc    "$R_WINDOWS"
           report macos-x64       "$R_MACOS_X64"
           report macos-arm64     "$R_MACOS_ARM64"
+          report windows-x86     "$R_WINDOWS_X86"
           report ndk             "$R_NDK"
           exit "$fail"

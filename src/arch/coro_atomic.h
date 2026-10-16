@@ -154,6 +154,9 @@ static inline uintptr_t coro_atp_exchange(volatile uintptr_t* p, uintptr_t v) {
 #elif defined(_MSC_VER)
 
 #include <intrin.h>
+#if defined(_M_IX86)
+#include <emmintrin.h> /* _mm_mfence: the x86 full-fence spelling below */
+#endif
 
 /* The intrinsics below take the address of a 64-bit word, and the wrappers
    cast freely between uint64_t*, long long* and void*. Those casts are only
@@ -163,6 +166,60 @@ static inline uintptr_t coro_atp_exchange(volatile uintptr_t* p, uintptr_t v) {
    check; MSVC's C front end supports __alignof. */
 typedef char coro_atomic_word_size_must_be_8[(sizeof(uint64_t) == 8) ? 1 : -1];
 typedef char coro_atomic_word_align_must_be_8[(__alignof(uint64_t) == 8) ? 1 : -1];
+
+#if defined(_M_IX86)
+/* x86: of the 64-bit interlocked family only the compare-exchange form (and
+   the pointer-width forms) is declared for 32-bit targets -- the
+   exchange/add/or/and intrinsics are x64/ARM declarations, rejected as
+   undeclared by the VS2022 x86 toolset (C4013; the Windows x86 job is the
+   evidence). Where they exist they compile to a locked cmpxchg8b loop; the
+   helpers below are exactly that loop, so the operations keep the locked
+   full-barrier semantics and the exchange-family return value. All of them
+   rely on the 8-byte alignment the static asserts above pin. */
+static inline uint64_t coro_msx86_exchange(volatile uint64_t* p, uint64_t v) {
+    uint64_t old = (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)v, (long long)old);
+        if (observed == old) return old;
+        old = observed;
+    }
+}
+
+static inline uint64_t coro_msx86_fetch_add(volatile uint64_t* p, uint64_t v) {
+    uint64_t old = (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)(old + v), (long long)old);
+        if (observed == old) return old;
+        old = observed;
+    }
+}
+
+static inline uint64_t coro_msx86_or(volatile uint64_t* p, uint64_t v) {
+    uint64_t old = (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)(old | v), (long long)old);
+        if (observed == old) return old;
+        old = observed;
+    }
+}
+
+static inline uint64_t coro_msx86_and(volatile uint64_t* p, uint64_t v) {
+    uint64_t old = (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)(old & v), (long long)old);
+        if (observed == old) return old;
+        old = observed;
+    }
+}
+#endif /* _M_IX86 */
 
 /* Fast path (x64, default on): a plain volatile access plus a compiler
    barrier. MSVC's volatile keeps its acquire/release meaning and x64
@@ -195,7 +252,11 @@ static inline uint64_t coro_at_load(const volatile uint64_t* p) {
 }
 
 static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    (void)coro_msx86_exchange(p, v);
+#else
     _InterlockedExchange64((volatile long long*)p, (long long)v);
+#endif
 }
 
 #endif /* _M_X64 fast path */
@@ -216,47 +277,86 @@ static inline int coro_at_cas(volatile uint64_t* p, uint64_t* expected,
 }
 
 static inline uint64_t coro_at_fetch_add(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    return coro_msx86_fetch_add(p, v);
+#else
     return (uint64_t)_InterlockedExchangeAdd64((volatile long long*)p,
                                                (long long)v);
+#endif
 }
 
 static inline uint64_t coro_at_exchange(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    return coro_msx86_exchange(p, v);
+#else
     return (uint64_t)_InterlockedExchange64((volatile long long*)p,
                                             (long long)v);
+#endif
 }
 
 static inline uint64_t coro_at_or(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    return coro_msx86_or(p, v);
+#else
     return (uint64_t)_InterlockedOr64((volatile long long*)p, (long long)v);
+#endif
 }
 
 /* Release-OR: see the GCC/Clang note above. The interlocked OR already
    carries release semantics (it is a full barrier), so the same intrinsic
-   serves. */
+   serves; the x86 helper is the same locked cmpxchg8b loop. */
 static inline uint64_t coro_at_or_release(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    return coro_msx86_or(p, v);
+#else
     return (uint64_t)_InterlockedOr64((volatile long long*)p, (long long)v);
+#endif
 }
 
 static inline uint64_t coro_at_and(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    return coro_msx86_and(p, v);
+#else
     return (uint64_t)_InterlockedAnd64((volatile long long*)p, (long long)v);
+#endif
 }
 
 static inline void coro_at_fence(void) {
     /* A full fence without <windows.h>: the compiler barrier orders the
-       source, __faststorefence orders the hardware. On x64 that pair is
-       exactly what winnt.h's MemoryBarrier expands to, which keeps this
-       internal header free of the Windows SDK (the M9 W2a fix for the
-       "MemoryBarrier undeclared" build failure). x64 MSVC is the M9 scope.
-       Verified codegen (fence_probe): lock or dword ptr [rsp],0 -- a full
-       barrier, StoreLoad included. */
+       source, the hardware barrier follows. On x64 __faststorefence is the
+       documented full barrier (winnt.h's MemoryBarrier expands to the same
+       pair); on x86 (MSVC ml/cl, _M_IX86) that intrinsic does not exist and
+       _mm_mfence() -- SSE2, the x86 MSVC default -- is the equivalent full
+       barrier with StoreLoad included. The x64 codegen was verified
+       (fence_probe): lock or dword ptr [rsp],0 -- a full barrier; the x86
+       path is verified by the Windows x86 CI job. */
     _ReadWriteBarrier();
+#if defined(_M_X64)
     __faststorefence();
+#else /* _M_IX86: _mm_mfence */
+    _mm_mfence();
+#endif
 }
 
 /* Sequentially consistent barrier spelled as a zero-delta fetch-add on a
    64-bit word the caller's protocol already owns (see the GCC note above).
-   The interlocked add is a full barrier, so the same spelling serves. */
+   The interlocked add is a full barrier, so the same spelling serves; on
+   x86 the zero-delta form is a locked compare-exchange of the value with
+   itself (a failed attempt only re-reads; the successful attempt is the
+   locked RMW the contract needs). */
 static inline void coro_at_fence_rmw(volatile uint64_t* p) {
+#if defined(_M_IX86)
+    uint64_t old = (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+    for (;;) {
+        uint64_t observed = (uint64_t)_InterlockedCompareExchange64(
+            (volatile long long*)p, (long long)old, (long long)old);
+        if (observed == old) break;
+        old = observed;
+    }
+#else
     (void)_InterlockedExchangeAdd64((volatile long long*)p, 0);
+#endif
 }
 
 static inline uint64_t coro_at_cas_value(volatile uint64_t* p,

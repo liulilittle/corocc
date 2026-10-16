@@ -11,7 +11,7 @@
 
 | 维度 | 支持范围 |
 | --- | --- |
-| 操作系统 | Linux(glibc)、Windows(x64)、macOS(x86_64 与 Apple Silicon arm64)、Android(编译+链接;NDK r26+) |
+| 操作系统 | Linux(glibc)、Windows(x64 与 x86)、macOS(x86_64 与 Apple Silicon arm64)、Android(编译+链接;NDK r26+) |
 | 编译器 | GCC 与 Clang(CI 与本机使用 Ubuntu 24.04 工具链——GCC 13 / Clang 18)、MSVC(Visual Studio 2022,`/W4 /WX`)、Apple clang(Xcode,CI macOS 运行器) |
 | 库语言 | C99(头文件可作 C99 与 C++11 编译) |
 | 封装语言 | C++11(经 C++20 前向验证;MSVC 基线 `/std:c++14`) |
@@ -31,6 +31,7 @@
 | --- | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | x86-64 SysV ELF | LP64 | CI native 任务(GCC + Clang)且本机全量套件通过 |
 | `x86_64-pc-windows-msvc` | x86-64 PE(MASM 后端) | LLP64 | CI Windows 任务且本机全量套件通过 |
+| Windows x86(`windows-x86` 任务) | x86 PE(MASM 后端,ml.exe) | ILP32,`uint64_t` 8 字节对齐 | CI x86 任务(VS2022 Win32);32 位二进制在 x64 runner 上经 WoW64 原生运行,全量套件 |
 | macOS x86_64(`macos-x64` 任务) | x86-64 Mach-O | LP64 | CI macOS x64 任务(Apple clang,全量套件) |
 | macOS arm64(`macos-arm64` 任务) | aarch64 Mach-O | LP64 | CI macOS arm64 任务(Apple clang,全量套件) |
 
@@ -111,6 +112,7 @@ ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 �
 | `headers` | 头文件一致性:公开头在严格告警下可独立按 C99 与 C++11 编译。 |
 | `cross`(20 个任务) | 每个交叉 ABI 一个任务:交叉工具链构建 + 对应 `qemu-user` 下运行 CTest 套件。 |
 | `windows-msvc` | Visual Studio 2022 x64 构建(Debug + Release)与 Release 测试套件。 |
+| `windows-x86` | Visual Studio 2022 Win32(x86)构建(Debug + Release)与 Release 测试套件;32 位二进制在 x64 runner 上原生运行。 |
 | `macos-x64`、`macos-arm64` | macOS 原生构建(Apple clang)+ Release 全量测试套件,分别覆盖 Intel(`macos-15-intel`)与 Apple Silicon(`macos-15`)。 |
 | `ndk`(2 个任务) | Android NDK 对 `arm64-v8a` 与 `x86_64` 的编译+链接。 |
 | `ci-summary` | 汇总各任务;除显式白名单外,被跳过(skipped)的任务会使汇总失败。 |

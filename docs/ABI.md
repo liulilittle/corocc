@@ -68,10 +68,12 @@ distinct layouts:
 - **LLP64** (64-bit Windows): pointers and `size_t` are 8 bytes, `long` is
   4 bytes — no public field uses `long`, so **LLP64 is layout-identical to
   LP64**.
-- **ILP32, 8-byte `uint64_t` alignment** (ARM EABI, MIPS o32): pointers and
-  `size_t` are 4 bytes; `uint64_t` is 8 bytes aligned to 8. Measured on the
-  armhf and mips o32 targets; the remaining 32-bit ARM/MIPS/riscv targets
-  follow the same alignment rule.
+- **ILP32, 8-byte `uint64_t` alignment** (ARM EABI, MIPS o32, Win32
+  MSVC): pointers and `size_t` are 4 bytes; `uint64_t` is 8 bytes aligned
+  to 8. Measured on the armhf, mips o32 and Windows x86 targets; the
+  remaining 32-bit ARM/MIPS/riscv targets follow the same alignment rule.
+  MSVC's x86 default (`/Zp8`) keeps `__int64` 8-byte aligned, so Win32
+  joins this table rather than the 4-byte one.
 - **ILP32, 4-byte `uint64_t` alignment** (i386 SysV): pointers and `size_t`
   are 4 bytes; `uint64_t` is 8 bytes aligned to 4. Applies to the i386
   target. The four pointer-only structures (`coro_stack`, `coro_ctx`,
@@ -84,6 +86,7 @@ probe on every locally available platform, all consistent:
 | Site | Pointer model | Result |
 | --- | --- | --- |
 | Windows x64, MSVC (`cl`, VS2022 17.x, `/W4 /WX`) | LLP64 | matches the LP64 table |
+| Windows x86 (Win32), MSVC (`cl`, VS2022 17.x, `/W4 /WX`) | ILP32, 8-byte `uint64_t` | matches the first ILP32 table |
 | Linux x86-64, GCC 13 | LP64 | baseline |
 | Linux aarch64, GCC 13 / `qemu-aarch64` | LP64 | identical |
 | Linux riscv64, GCC 13 / `qemu-riscv64` | LP64 | identical |
