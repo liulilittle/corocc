@@ -74,11 +74,12 @@ distinct layouts:
   remaining 32-bit ARM/MIPS/riscv targets follow the same alignment rule.
   MSVC's x86 default (`/Zp8`) keeps `__int64` 8-byte aligned, so Win32
   joins this table rather than the 4-byte one.
-- **ILP32, 4-byte `uint64_t` alignment** (i386 SysV): pointers and `size_t`
-  are 4 bytes; `uint64_t` is 8 bytes aligned to 4. Applies to the i386
-  target. The four pointer-only structures (`coro_stack`, `coro_ctx`,
-  `coro_attr_t`, `coro_allocator_t`) are identical to the other ILP32
-  variant; the six structures containing `uint64_t` are smaller.
+- **ILP32, 4-byte `uint64_t` alignment** (i386 SysV, Android x86):
+  pointers and `size_t` are 4 bytes; `uint64_t` is 8 bytes aligned to 4.
+  Applies to the i386 target and the Android x86 ABI. The four pointer-only
+  structures (`coro_stack`, `coro_ctx`, `coro_attr_t`, `coro_allocator_t`)
+  are identical to the other ILP32 variant; the six structures containing
+  `uint64_t` are smaller.
 
 The tables in the next sections are the *measured* values from the ABI
 probe on every locally available platform, all consistent:
@@ -95,6 +96,8 @@ probe on every locally available platform, all consistent:
 | Linux armhf (armv7 ABI), GCC 13 / `qemu-arm` | ILP32, 8-byte `uint64_t` | matches the first ILP32 table |
 | Linux mips (o32, big-endian), GCC / `qemu-mips` | ILP32, 8-byte `uint64_t` | identical to armhf |
 | Linux i386 (x86 32-bit SysV), GCC 13 | ILP32, 4-byte `uint64_t` | matches the i386 table |
+| Android NDK clang 18 (r27d), `armeabi-v7a` | ILP32, 8-byte `uint64_t` | matches the first ILP32 table (record-layout dump) |
+| Android NDK clang 18 (r27d), `x86` | ILP32, 4-byte `uint64_t` | matches the i386 table (record-layout dump) |
 
 Byte order does not change any offset: the layout rules above are
 endian-independent; a binary is still only exchangeable with the **same**
@@ -227,10 +230,14 @@ part of the link ABI of those archives.
 
 - **Android NDK (r26+).** Compile-and-link support through
   `scripts/toolchains/android-ndk.cmake`, which selects the toolchain and
-  the target ABI (`ANDROID_ABI`: `arm64-v8a`, `x86_64`, …) with Android API
-  level 24 and the static C++ STL. The CI compiles and links both
-  `arm64-v8a` and `x86_64`; on-device runs are outside the emulator matrix.
-  Both published Android ABIs are LP64 and follow the 64-bit table.
+  the target ABI (`ANDROID_ABI`: `arm64-v8a`, `armeabi-v7a`, `x86_64`,
+  `x86`) with Android API level 24 and the static C++ STL. The CI compiles
+  and links all four ABIs; on-device runs are outside the emulator matrix.
+  Layouts, measured with the NDK clang record-layout dump: `arm64-v8a` and
+  `x86_64` are LP64 (the 64-bit table); `armeabi-v7a` is ILP32 with 8-byte
+  `uint64_t` (the first ILP32 table); `x86` is ILP32 with 4-byte
+  `uint64_t` (the i386 table) -- Android x86 joins the 4-byte table, unlike
+  Win32 MSVC x86 which is 8-byte aligned.
 - **macOS (Mach-O).** Native builds on macOS x86_64 and arm64 use the
   vendored Mach-O backends (`x86_64_sysv_macho_gas.S`,
   `arm64_aapcs_macho_gas.S`); both are LP64 and follow the 64-bit layout

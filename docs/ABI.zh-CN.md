@@ -61,8 +61,9 @@
   `size_t` 为 4 字节;`uint64_t` 为 8 字节、对齐 8。已在 armhf、mips o32 与
   Windows x86 实测;其余 32 位 ARM/MIPS/riscv 目标遵循同一规则。MSVC x86
   默认(`/Zp8`)保持 `__int64` 8 字节对齐,因此 Win32 归入本表而非 4 字节表。
-- **ILP32,`uint64_t` 4 字节对齐**(i386 SysV):指针与 `size_t` 为 4 字节;
-  `uint64_t` 为 8 字节、对齐 4。适用于 i386 目标。四个纯指针结构体
+- **ILP32,`uint64_t` 4 字节对齐**(i386 SysV、Android x86):指针与 `size_t`
+  为 4 字节;`uint64_t` 为 8 字节、对齐 4。适用于 i386 目标与 Android x86
+  ABI。四个纯指针结构体
   (`coro_stack`、`coro_ctx`、`coro_attr_t`、`coro_allocator_t`)与另一种
   ILP32 变体一致;六个含 `uint64_t` 的结构体更小。
 
@@ -80,6 +81,8 @@
 | Linux armhf(armv7 ABI),GCC 13 / `qemu-arm` | ILP32,`uint64_t` 8 字节对齐 | 与第一张 ILP32 表一致 |
 | Linux mips(o32,大端),GCC / `qemu-mips` | ILP32,`uint64_t` 8 字节对齐 | 与 armhf 一致 |
 | Linux i386(x86 32 位 SysV),GCC 13 | ILP32,`uint64_t` 4 字节对齐 | 与 i386 表一致 |
+| Android NDK clang 18(r27d),`armeabi-v7a` | ILP32,`uint64_t` 8 字节对齐 | 与第一张 ILP32 表一致(record-layout dump) |
+| Android NDK clang 18(r27d),`x86` | ILP32,`uint64_t` 4 字节对齐 | 与 i386 表一致(record-layout dump) |
 
 字节序不改变任何偏移:上述布局规则与端序无关;但二进制仍然只能与**相同**
 ABI(架构、端序、位宽、ABI 变体与 C 库)互换。上表中的大端站点是为了证明
@@ -197,9 +200,12 @@ ABI(架构、端序、位宽、ABI 变体与 C 库)互换。上表中的大端�
 
 - **Android NDK(r26+)。** 经 `scripts/toolchains/android-ndk.cmake` 提供
   编译链接支持:该文件选择工具链与目标 ABI(`ANDROID_ABI`:`arm64-v8a`、
-  `x86_64` 等),Android API level 24,静态 C++ STL。CI 对 `arm64-v8a` 与
-  `x86_64` 两个 ABI 做编译+链接验证;设备上运行不在模拟器矩阵内。两个已发布
-  Android ABI 都是 LP64,遵循 64 位表。
+  `armeabi-v7a`、`x86_64`、`x86`),Android API level 24,静态 C++ STL。
+  CI 对全部四个 ABI 做编译+链接验证;设备上运行不在模拟器矩阵内。布局
+  (经 NDK clang record-layout dump 实测):`arm64-v8a` 与 `x86_64` 为 LP64
+  (64 位表);`armeabi-v7a` 为 ILP32、`uint64_t` 8 字节对齐(第一张 ILP32
+  表);`x86` 为 ILP32、`uint64_t` 4 字节对齐(i386 表)——Android x86 归入
+  4 字节表,与 Win32 MSVC x86 的 8 字节对齐不同。
 - **macOS(Mach-O)。** macOS x86_64 与 arm64 的原生构建使用 vendored Mach-O
   后端(`x86_64_sysv_macho_gas.S`、`arm64_aapcs_macho_gas.S`);两者都是
   LP64,遵循 64 位布局表。公开头保持与 ELF 相同的 `extern "C"` 表面与

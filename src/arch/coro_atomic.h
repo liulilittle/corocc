@@ -29,6 +29,19 @@ extern unsigned long coro_probe_cas_count;
 
 #if defined(__GNUC__) || defined(__clang__)
 
+#if defined(__clang__)
+/* clang requires 8-byte alignment for inline 64-bit atomics and lowers an
+   under-aligned one to a libatomic call; that call is the correctness path
+   on targets whose uint64_t alignment is 4 (i386 SysV, Android x86), and
+   the link already carries libatomic (the 32-bit probe in
+   cmake/arch_select.cmake, or the NDK's implicit link). clang still emits a
+   performance advisory (-Watomic-alignment) for every such operation, which
+   the project's -Werror turns fatal; the advisory is silenced here while
+   the operation itself stays the same. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Watomic-alignment"
+#endif
+
 /* GCC and Clang: __atomic builtins map onto the target's lock-free atomics
    where available, and libatomic otherwise. */
 
@@ -150,6 +163,10 @@ static inline int coro_atp_cas(volatile uintptr_t* p, uintptr_t* expected,
 static inline uintptr_t coro_atp_exchange(volatile uintptr_t* p, uintptr_t v) {
     return __atomic_exchange_n(p, v, __ATOMIC_ACQ_REL);
 }
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #elif defined(_MSC_VER)
 

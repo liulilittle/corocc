@@ -127,6 +127,25 @@ jobs:
       - name: smoke (clang++, -std=c++11 -Wall -Wextra -Werror)
         run: clang++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/boost/asio_smoke.cpp smoke-build/*.o -pthread -o smoke-clang && ./smoke-clang
 
+  # The asio-host integration example (examples/backends/asio-host) is a
+  # stand-alone CMake project: the library's default build/install does not
+  # contain it. This job is the single-platform proof that the example
+  # compiles and runs; the example has its own ctest set, so the library's
+  # test population (45/44) is untouched. The example's Windows/MSVC run is
+  # covered by local evidence (the runner image carries no Boost headers).
+  asio-host-example:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libboost-dev ninja-build
+      - name: configure + build the example (stand-alone project)
+        run: |
+          cmake -S examples/backends/asio-host -B build-asio-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-asio-host -j2
+      - name: ctest (the example's own suite)
+        run: ctest --test-dir build-asio-host --output-on-failure --timeout 300
+
   cross:
     name: cross ${{ matrix.abi }}
     runs-on: ubuntu-24.04
@@ -278,7 +297,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        android_abi: [arm64-v8a, x86_64]   # armeabi-v7a pending local verification
+        android_abi: [arm64-v8a, x86_64, armeabi-v7a, x86]   # all four NDK ABIs, each with a vendored backend
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build
@@ -330,6 +349,7 @@ jobs:
           R_NOSPIN: ${{ needs.nospin.result }}
           R_HEADERS: ${{ needs.headers.result }}
           R_BOOST_ASIO: ${{ needs.boost-asio.result }}
+          R_ASIO_HOST_EXAMPLE: ${{ needs.asio-host-example.result }}
           R_CROSS: ${{ needs.cross.result }}
           R_WINDOWS: ${{ needs.windows-msvc.result }}
           R_MACOS_X64: ${{ needs.macos-x64.result }}
@@ -355,6 +375,7 @@ jobs:
           report nospin          "$R_NOSPIN"
           report headers         "$R_HEADERS"
           report boost-asio      "$R_BOOST_ASIO"
+          report asio-host-example "$R_ASIO_HOST_EXAMPLE"
           report cross           "$R_CROSS"
           report windows-msvc    "$R_WINDOWS"
           report macos-x64       "$R_MACOS_X64"

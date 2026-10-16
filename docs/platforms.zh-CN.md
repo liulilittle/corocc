@@ -84,10 +84,12 @@ macOS 平台注记:Darwin 没有 `pthread_condattr_setclock`,条件变量垫片�
 
 - 经 `scripts/toolchains/android-ndk.cmake` 提供编译+链接支持(NDK r26+,
   `ANDROID_ABI` 选择目标,API level 24,静态 C++ STL)。
-- CI 门禁 `arm64-v8a` 与 `x86_64`;设备上执行不在模拟器矩阵内。
-  `armeabi-v7a` 可经同一工具链文件构建。
-- 两个受门禁 Android ABI 均为 LP64,遵循 [ABI.zh-CN.md](ABI.zh-CN.md) 的
-  64 位表。
+- CI 门禁全部四个 NDK ABI:`arm64-v8a`、`x86_64`、`armeabi-v7a` 与 `x86`
+  (各一个构建任务);设备上执行不在模拟器矩阵内。
+- 布局(经 NDK clang record-layout dump 实测):`arm64-v8a` 与 `x86_64` 为
+  LP64,遵循 [ABI.zh-CN.md](ABI.zh-CN.md) 的 64 位表;`armeabi-v7a` 为
+  ILP32、`uint64_t` 8 字节对齐(第一张 ILP32 表);`x86` 为 ILP32、
+  `uint64_t` 4 字节对齐(i386 表)。
 
 ## 消毒器与插桩构建
 

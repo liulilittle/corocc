@@ -90,11 +90,14 @@ the overflow suite accepts alongside Linux's `SIGSEGV`.
 
 - Compile-and-link support through `scripts/toolchains/android-ndk.cmake`
   (NDK r26+, `ANDROID_ABI` selects the target, API level 24, static C++ STL).
-- CI gates `arm64-v8a` and `x86_64`; on-device execution is outside the
-  emulator matrix. `armeabi-v7a` is available through the same toolchain
-  file.
-- Both gated Android ABIs are LP64 and follow the 64-bit layout table in
-  [ABI.md](ABI.md).
+- CI gates all four NDK ABIs: `arm64-v8a`, `x86_64`, `armeabi-v7a` and
+  `x86` (one build job each); on-device execution is outside the emulator
+  matrix.
+- Layouts (measured with the NDK clang record-layout dump): `arm64-v8a` and
+  `x86_64` are LP64 and follow the 64-bit layout table in
+  [ABI.md](ABI.md); `armeabi-v7a` is ILP32 with 8-byte `uint64_t` (the
+  first ILP32 table); `x86` is ILP32 with 4-byte `uint64_t` (the i386
+  table).
 
 ## Sanitizers and instrumented builds
 
