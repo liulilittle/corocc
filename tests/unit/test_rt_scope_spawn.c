@@ -55,17 +55,28 @@ static coro_status code_entry(void* arg) {
     return (coro_status)(size_t)arg;
 }
 
-/* Sleeps for dc->ms on the runtime, then returns dc->code. */
-struct delay_code {
-    unsigned    ms;
-    coro_status code;
-};
+/* Completion-order handoff for the aggregation scene below: the
+   first-registered child parks on this semaphore until the second child has
+   finished. */
+static coro_rt_sem_t g_order_gate;
 
-static coro_status delayed_code_entry(void* arg) {
-    struct delay_code* dc = (struct delay_code*)arg;
-    (void)coro_rt_sleep(g_rt,
-                        coro_monotonic_ns() + (uint64_t)dc->ms * 1000000ull);
-    return dc->code;
+/* The completion-order scene's second child: finishes on its own timer (a
+   real timer-driven park stays in the scene), then releases the gate and
+   reports ESTALE. */
+static coro_status fast_err_entry(void* arg) {
+    (void)arg;
+    (void)coro_rt_sleep(g_rt, coro_monotonic_ns() + 10000000ull); /* 10ms */
+    (void)coro_rt_sem_post(g_rt, &g_order_gate);
+    return CORO_ESTALE;
+}
+
+/* The first-registered child: parks on the gate and reports EBUSY only
+   after the second child finished, so completion order is
+   fast-then-slow by construction. */
+static coro_status slow_err_entry(void* arg) {
+    (void)arg;
+    (void)coro_rt_sem_wait(g_rt, &g_order_gate);
+    return CORO_EBUSY;
 }
 
 /* Sleeps 100ms and propagates the sleep's status: OK at the deadline,
@@ -133,26 +144,34 @@ static void run_tests(void) {
 
     /* ---- aggregation is the first non-OK in completion order ---------- */
     {
-        /* 10ms/ESTALE finishes before 60ms/EBUSY: the aggregate is the
-           first error in COMPLETION order (ESTALE), not registration
-           order (EBUSY). */
-        struct delay_code slow = { 60, CORO_EBUSY };
-        struct delay_code fast = { 10, CORO_ESTALE };
+        /* The first-registered child (slow) reports EBUSY only after the
+           second (fast) has finished and released the gate, so fast's
+           ESTALE is the first error in COMPLETION order while the aggregate
+           must NOT follow registration order (EBUSY was registered first).
+           The completion order is enforced by the semaphore handoff, not by
+           a 10ms-vs-60ms timer gap: when a scheduling stall lets two timers
+           expire in the same wake cycle, the runtime resumes the expired
+           nodes in deque order and makes no completion-order promise for
+           simultaneously expired timers (reproduced by freezing the process
+           across the deadlines: the aggregate then legitimately reflects
+           whichever expiry is driven first, which reddened the macOS CI
+           sites that had pinned the old timer-gap assumption). */
         coro_rt_scope_t s;
         struct scene sc;
         coro_status* cslow = NULL;
         coro_status* cfast = NULL;
         memset(&s, 0, sizeof s);
+        coro_rt_sem_init(&g_order_gate, 0);
         sc.s = &s;
         sc.wait = CORO_OK;
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, delayed_code_entry, &slow,
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, slow_err_entry, NULL,
                                   &cslow) == CORO_OK);
-        CHECK(coro_rt_scope_spawn(rt, &s, NULL, delayed_code_entry, &fast,
+        CHECK(coro_rt_scope_spawn(rt, &s, NULL, fast_err_entry, NULL,
                                   &cfast) == CORO_OK);
         run_scene(&sc);
-        CHECK(sc.wait == CORO_ESTALE);
-        CHECK(*cslow == CORO_EBUSY);
-        CHECK(*cfast == CORO_ESTALE);
+        CHECK_EQ(sc.wait, CORO_ESTALE);
+        CHECK_EQ(*cslow, CORO_EBUSY);
+        CHECK_EQ(*cfast, CORO_ESTALE);
         CHECK(coro_rt_scope_destroy(&s) == CORO_OK);
     }
 
