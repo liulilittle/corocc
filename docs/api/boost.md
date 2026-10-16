@@ -98,7 +98,9 @@ int main() {
     boost::asio::io_context io;
     boost::asio::ip::tcp::socket sock(io);
 
-    corocc::runtime rt(2);          /* worker pool drives the coroutines */
+    corocc::runtime rt(2);          /* 2 worker threads drive all coroutines
+                                       (the coroutine count is unbounded,
+                                       bounded only by memory) */
     coro_rt_t* crt = rt.native();   /* the raw handle the wrappers take */
 
     /* ... connect/accept sock on some thread; run io somewhere ... */
@@ -119,6 +121,10 @@ int main() {
     return 0;
 }
 ```
+
+`rt(2)` selects two worker threads; it does not cap how many coroutines you
+can spawn. Coroutines are created on demand and their number is unbounded
+(bounded only by memory) — the workers merely drive them.
 
 ## Build notes
 

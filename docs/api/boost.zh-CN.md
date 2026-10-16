@@ -78,7 +78,8 @@ int main() {
     boost::asio::io_context io;
     boost::asio::ip::tcp::socket sock(io);
 
-    corocc::runtime rt(2);          /* worker 池驱动协程 */
+    corocc::runtime rt(2);          /* 2 个 worker 线程驱动全部协程
+                                       (协程数量无上限,仅受内存约束) */
     coro_rt_t* crt = rt.native();   /* 包装器需要的裸句柄 */
 
     /* ... 在某个线程连接/接受 sock;在别处运行 io ... */
@@ -99,6 +100,9 @@ int main() {
     return 0;
 }
 ```
+
+`rt(2)` 只是两枚 worker 线程;它不限制可创建的协程数量——协程按需增长,
+仅受内存约束,worker 只负责驱动。
 
 ## 构建说明
 
