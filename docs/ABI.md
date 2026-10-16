@@ -61,8 +61,10 @@ All complete public structures are built exclusively from `void*` pointers,
 `size_t`, `uint64_t` and 32-bit enumerations. That yields exactly these
 distinct layouts:
 
-- **LP64** (Linux/most Unix 64-bit): pointers, `size_t` and `long` are
-  8 bytes.
+- **LP64** (Linux and macOS, most Unix 64-bit): pointers, `size_t` and
+  `long` are 8 bytes. macOS x86_64 and Apple Silicon arm64 are LP64, so the
+  64-bit layout table below applies to them unchanged (like LLP64, and for
+  the same reason: no public field uses `long`).
 - **LLP64** (64-bit Windows): pointers and `size_t` are 8 bytes, `long` is
   4 bytes — no public field uses `long`, so **LLP64 is layout-identical to
   LP64**.
@@ -226,6 +228,15 @@ part of the link ABI of those archives.
   level 24 and the static C++ STL. The CI compiles and links both
   `arm64-v8a` and `x86_64`; on-device runs are outside the emulator matrix.
   Both published Android ABIs are LP64 and follow the 64-bit table.
+- **macOS (Mach-O).** Native builds on macOS x86_64 and arm64 use the
+  vendored Mach-O backends (`x86_64_sysv_macho_gas.S`,
+  `arm64_aapcs_macho_gas.S`); both are LP64 and follow the 64-bit layout
+  table. The public headers keep the same `extern "C"` surface and
+  `visibility("default")` spelling as ELF; the only Darwin-specific
+  platform adjustments are internal (realtime condition-variable deadlines
+  and `MAP_ANON`). Mach-O symbols carry the usual C underscore prefix in the
+  artefacts (`_corocc_asm_make`), which is the platform's standard
+  translation and does not change the documented C names.
 - **Cross toolchains.** Cross builds use the toolchain files under
   `scripts/toolchains/` (one per ABI; see
   [platforms.md](platforms.md) for the ISA list), are linked statically for

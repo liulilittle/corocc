@@ -52,7 +52,9 @@
 所有完整公开结构体只由 `void*` 指针、`size_t`、`uint64_t` 与 32 位枚举构成。
 这恰好产生如下几种布局:
 
-- **LP64**(Linux/多数 Unix 64 位):指针、`size_t`、`long` 均为 8 字节。
+- **LP64**(Linux 与 macOS、多数 Unix 64 位):指针、`size_t`、`long` 均为
+  8 字节。macOS x86_64 与 Apple Silicon arm64 均为 LP64,故下方 64 位布局表
+  原样适用(与 LLP64 同理,原因相同:公开字段不使用 `long`)。
 - **LLP64**(64 位 Windows):指针与 `size_t` 为 8 字节,`long` 为 4 字节——
   公开字段不使用 `long`,因此 **LLP64 与 LP64 布局完全一致**。
 - **ILP32,`uint64_t` 8 字节对齐**(ARM EABI、MIPS o32):指针与 `size_t`
@@ -196,6 +198,12 @@ ABI(架构、端序、位宽、ABI 变体与 C 库)互换。上表中的大端�
   `x86_64` 等),Android API level 24,静态 C++ STL。CI 对 `arm64-v8a` 与
   `x86_64` 两个 ABI 做编译+链接验证;设备上运行不在模拟器矩阵内。两个已发布
   Android ABI 都是 LP64,遵循 64 位表。
+- **macOS(Mach-O)。** macOS x86_64 与 arm64 的原生构建使用 vendored Mach-O
+  后端(`x86_64_sysv_macho_gas.S`、`arm64_aapcs_macho_gas.S`);两者都是
+  LP64,遵循 64 位布局表。公开头保持与 ELF 相同的 `extern "C"` 表面与
+  `visibility("default")` 拼写;仅有的 Darwin 平台调整都在内部(条件变量
+  实时时钟期限与 `MAP_ANON`)。Mach-O 产物中的符号带常规 C 下划线前缀
+  (`_corocc_asm_make`),这是该平台的标准翻译,不改变文档所述 C 名称。
 - **交叉工具链。** 交叉构建使用 `scripts/toolchains/` 下的工具链文件(每个
   ABI 一个;ISA 清单见 [platforms.zh-CN.md](platforms.zh-CN.md)),面向模拟器
   运行做静态链接,并按 ISA 在 `qemu-user` 下执行。不同目标产出的二进制**不可

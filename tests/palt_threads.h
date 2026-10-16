@@ -10,7 +10,10 @@
  * The concurrency suites were written against pthreads, which does not exist
  * on Windows. This layer gives them one vocabulary to write against:
  *
- *   POSIX   -- the pt_* wrappers forward straight to pthreads.
+ *   POSIX   -- the pt_* wrappers forward straight to pthreads. macOS has no
+ *              POSIX barrier (there is no pthread_barrier_t in the SDK
+ *              headers), so there the barrier is hand-rolled from
+ *              mutex+condition with the same phase semantics.
  *   Windows -- SRWLOCK for mutexes, CONDITION_VARIABLE for conditions, a
  *              hand-rolled mutex+condition barrier, and _beginthreadex for
  *              threads (the CRT-safe entry, joined through
@@ -140,14 +143,13 @@ static inline int pt_thread_join(pt_thread_t t) {
     return rc == WAIT_OBJECT_0 ? 0 : -1;
 }
 
-#else /* !_WIN32: straight forwards to pthreads */
+#else /* !_WIN32: forwards to pthreads (barrier by hand on macOS) */
 
 #include <pthread.h>
 
 typedef pthread_t       pt_thread_t;
 typedef pthread_mutex_t pt_mutex_t;
 typedef pthread_cond_t  pt_cond_t;
-typedef pthread_barrier_t pt_barrier_t;
 
 #define PT_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
 #define PT_COND_INITIALIZER  PTHREAD_COND_INITIALIZER
@@ -173,12 +175,64 @@ static inline int pt_cond_broadcast(pt_cond_t* c) {
 static inline int pt_cond_signal(pt_cond_t* c) {
     return pthread_cond_signal(c);
 }
+
+#if defined(__APPLE__)
+/* macOS has no POSIX barrier: current SDK headers declare no
+   pthread_barrier_t / pthread_barrier_init (verified against the macOS 15.5
+   SDK before this branch was added). The hand-rolled phase barrier below
+   gives the suites the same contract the pthread_barrier_* family does:
+   every party of a phase is released together, and exactly one waiter sees
+   1 (the PTHREAD_BARRIER_SERIAL_THREAD analogue). Same algorithm as the
+   Windows branch above. */
+typedef struct pt_barrier {
+    pthread_mutex_t lock;
+    pthread_cond_t  cv;
+    unsigned        count; /* parties per phase */
+    unsigned        left;  /* parties still to arrive */
+    unsigned        gen;   /* phase counter: broadcast gates on it */
+} pt_barrier_t;
+
+static inline int pt_barrier_init(pt_barrier_t* b, unsigned count) {
+    if (pthread_mutex_init(&b->lock, NULL) != 0) return -1;
+    if (pthread_cond_init(&b->cv, NULL) != 0) {
+        pthread_mutex_destroy(&b->lock);
+        return -1;
+    }
+    b->count = count;
+    b->left = 0;
+    b->gen = 0;
+    return 0;
+}
+
+static inline int pt_barrier_wait(pt_barrier_t* b) {
+    int last = 0;
+    unsigned gen0;
+    pthread_mutex_lock(&b->lock);
+    gen0 = b->gen;
+    if (++b->left == b->count) {
+        b->left = 0;
+        ++b->gen;
+        last = 1;
+        pthread_cond_broadcast(&b->cv);
+    } else {
+        while (b->gen == gen0) {
+            pthread_cond_wait(&b->cv, &b->lock);
+        }
+    }
+    pthread_mutex_unlock(&b->lock);
+    return last;
+}
+#else
+typedef pthread_barrier_t pt_barrier_t;
+
 static inline int pt_barrier_init(pt_barrier_t* b, unsigned count) {
     return pthread_barrier_init(b, NULL, count);
 }
 static inline int pt_barrier_wait(pt_barrier_t* b) {
     return pthread_barrier_wait(b);
 }
+#endif /* __APPLE__ */
+
 static inline int pt_thread_create(pt_thread_t* t, void* (*fn)(void*),
                                    void* arg) {
     return pthread_create(t, NULL, fn, arg);

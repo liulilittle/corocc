@@ -27,6 +27,22 @@ ctest --test-dir build --output-on-failure
 测试数量公式(普通 Linux 43,安装 Boost.Context 后 `+1`,Release 构建 `+1`,
 Windows `-1`)详见仓库 README。
 
+### 构建与测试(macOS)
+
+macOS x86_64 与 Apple Silicon arm64 属本机目标:Mach-O 上下文切换后端按宿主
+架构自动选择,无需工具链文件(Xcode Command Line Tools 提供编译器与 SDK)。
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2
+ctest --test-dir build -E cpp_perf --output-on-failure
+```
+
+`-E cpp_perf` 与 CI 的 macOS 任务及其余门禁站点一致:吞吐门禁属于 Linux 站点
+职责,共享运行器上不跑;功能测试集(43 个)完整运行。macOS 的一些细节构建已
+代为处理:条件变量垫片把单调时钟期限换算到平台默认的实时时钟;栈映射使用
+`MAP_ANON`;守护页溢出以 `SIGBUS` 终止,溢出套件已接受该信号。
+
 ### 构建选项
 
 | 选项 | 默认 | 作用 |
@@ -143,7 +159,8 @@ target_link_libraries(myapp PRIVATE corocc::corocc)
 `powerpc64-unknown-linux-gnu`、`powerpc64le-unknown-linux-gnu`、
 `s390x-unknown-linux-gnu`、`aarch64_be-unknown-linux-gnu`、
 `armeb-unknown-linux-gnueabi`、`riscv64-unknown-linux-gnu`、
-`riscv32-unknown-linux-gnu`,另加 Windows 的 `x86_64-pc-windows-msvc`。
+`riscv32-unknown-linux-gnu`、`loongarch64-unknown-linux-gnu`、
+`sparc64-unknown-linux-gnu`,另加 Windows 的 `x86_64-pc-windows-msvc`。
 每个三元组都是独立的 ABI 包:归档不可跨三元组互换。
 
 `scripts/prebuild-all.sh` 可在本地生成同构布局(输出到 `dist/`)。

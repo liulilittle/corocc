@@ -23,6 +23,12 @@
 #else
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__APPLE__) && !defined(MAP_ANONYMOUS)
+/* Darwin spells the anonymous mapping flag MAP_ANON (sys/mman.h);
+   MAP_ANONYMOUS exists only on the other POSIX systems this library builds
+   on (Linux/glibc). Alias it so the mapping call below has one spelling. */
+#define MAP_ANONYMOUS MAP_ANON
+#endif
 #endif
 #include <stdint.h>
 #include <string.h>

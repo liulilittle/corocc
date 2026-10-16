@@ -20,7 +20,9 @@
  * that clock never has to convert scales; the Windows side converts to the
  * relative milliseconds SleepConditionVariableSRW expects and the POSIX side
  * converts to the absolute timespec pthread_cond_timedwait expects (the
- * condition variable is created against CLOCK_MONOTONIC for that reason).
+ * condition variable is created against CLOCK_MONOTONIC for that reason;
+ * macOS lacks that attribute and keeps its condition variables on the
+ * realtime clock, so there the conversion is done per call inside the shim).
  *
  * This header is INTERNAL: it is not installed and is not part of the public
  * API or ABI. It compiles as C99.
@@ -53,8 +55,11 @@ void coro_plat_mutex_unlock(coro_plat_mutex_t* m);
  *
  * Windows: InitializeConditionVariable; POSIX: pthread_cond_init bound to
  * CLOCK_MONOTONIC, so coro_plat_cond_timedwait_ns deadlines use the same
- * scale as coro_monotonic_ns. Zero-initialized objects are already usable on
- * Windows; this call makes that a contract rather than an accident.
+ * scale as coro_monotonic_ns. macOS has no pthread_condattr_setclock: the
+ * variable keeps the default realtime clock and the timed wait converts
+ * deadlines per call, re-arming after ETIMEDOUT. Zero-initialized objects are
+ * already usable on Windows; this call makes that a contract rather than an
+ * accident.
  *
  * @return 0 on success, non-zero on failure.
  */

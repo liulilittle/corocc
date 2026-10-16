@@ -31,13 +31,18 @@ The origin, version, and license of each are recorded below.
   - `sparc64_sysv_elf_gas.S` (sparc64 SysV ELF, big-endian) - from
     Boost.Context 1.92.0 (see the version note below); Copyright
     Claudio Jeker 2024, kept verbatim.
+  - `x86_64_sysv_macho_gas.S` (x86_64 Mach-O, macOS) - from Boost.Context
+    1.92.0; Copyright Oliver Kowalke 2009, kept verbatim.
+  - `arm64_aapcs_macho_gas.S` (arm64 Mach-O, macOS) - from Boost.Context
+    1.92.0; Copyright Edward Nevill + Oliver Kowalke 2015, kept verbatim.
 - **Upstream project:** Boost.Context (part of Boost).
 - **Version:** 1.83.0 (tag `boost-1.83.0`, commit
   `65b179db288d13da21447e4f430400338ce08ca2`) for all files above except the
-  two marked otherwise; the loongarch64 and sparc64 backends are from 1.92.0
-  (tag `boost-1.92.0`, commit `cc1b9e02cd530d6607becc984e1e5bfa4f7b3600`,
-  the newest release at vendoring time; the sparc64 files differ from 1.87.0
-  only by a comment spelling fix).
+  four marked otherwise; the loongarch64, sparc64 and both Mach-O backends
+  are from 1.92.0 (tag `boost-1.92.0`, commit
+  `cc1b9e02cd530d6607becc984e1e5bfa4f7b3600`, the newest release at
+  vendoring time; the sparc64 files differ from 1.87.0 only by a comment
+  spelling fix).
 - **License:** Boost Software License 1.0 (BSL-1.0).
   Full text: <https://www.boost.org/LICENSE_1_0.txt>
 - **Compatibility:** BSL-1.0 is a permissive, OSI-approved license that is

@@ -17,21 +17,21 @@ instead of silent memory corruption, and zero warnings under
 | Area | What you get |
 | --- | --- |
 | Layers | L0 context primitives (`coro_stack`, `coro_ctx`), L1 coroutine objects with the token credential protocol, the L2 M:N work-stealing runtime with synchronization primitives (mutex, condition variable, semaphore, rwlock, channel), the L3 structured-concurrency scope layer, a single-thread scheduler, and a header-only C++11 wrapper (`coro.hpp`) |
-| Architectures | Native x86_64 (SysV ELF and MSVC PE/MASM) plus 17 cross-compiled ABIs: i386, aarch64/aarch64_be, arm32/armeb, MIPS o32/n32/n64 in both endiannesses, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64; every cross ABI builds and runs its test suite under QEMU user-mode emulation |
+| Architectures | Native x86_64 (SysV ELF, MSVC PE/MASM and Mach-O), native macOS arm64, plus 19 cross-compiled ABIs: i386, aarch64/aarch64_be, arm32/armeb, MIPS o32/n32/n64 in both endiannesses, ppc32/ppc64/ppc64le, s390x, riscv32/riscv64, loongarch64, sparc64; every cross ABI builds and runs its test suite under QEMU user-mode emulation |
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
 | Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`), including stack-use-after-return detection; a ThreadSanitizer suite covers the runtime's delivery queue, identity registry and atomics |
 | Boost coexistence | Symbol-renamed assembly coexists with real Boost.Context in one binary (`boost_coexist` test); an optional header-only Boost.Asio integration gives sockets a blocking shape inside coroutines |
-| Toolchain | GCC, Clang, MSVC (x64) and cross builds via CMake toolchain files; Android NDK compile-and-link support |
+| Toolchain | GCC, Clang, MSVC (x64), Apple clang (macOS x86_64/arm64) and cross builds via CMake toolchain files; Android NDK compile-and-link support |
 | Distribution | Per-triple prebuilt static-library archives on tagged releases, with a CMake config package and a zero-dependency consumer example |
 
 ## Platform support at a glance
 
 | Axis | Supported |
 | --- | --- |
-| OS | Linux (glibc), Windows x64, Android (NDK, compile+link) |
-| Compilers | GCC, Clang, MSVC (VS2022) |
+| OS | Linux (glibc), Windows x64, macOS x86_64 and arm64 (Apple Silicon), Android (NDK, compile+link) |
+| Compilers | GCC, Clang, MSVC (VS2022), Apple clang |
 | Language | C99 library; C++11 wrapper and optional header |
-| ISA targets | x86_64 (native SysV + MSVC), i386, aarch64 (+BE), armv7 (+BE), MIPS o32/n32/n64 (+LE), ppc32/ppc64/ppc64le, s390x, riscv32/riscv64 |
+| ISA targets | x86_64 (SysV ELF + MSVC PE + macOS Mach-O), i386, aarch64 (+BE) including macOS arm64, armv7 (+BE), MIPS o32/n32/n64 (+LE), ppc32/ppc64/ppc64le, s390x, riscv32/riscv64, loongarch64, sparc64 |
 
 The full matrix (with per-target CI jobs, emulator runners and known
 boundaries) is in [docs/platforms.md](docs/platforms.md).
@@ -148,8 +148,9 @@ Linux triples published this way: `x86_64-unknown-linux-gnu`,
 `mips64el-unknown-linux-gnuabin32`, `powerpc-unknown-linux-gnu`,
 `powerpc64-unknown-linux-gnu`, `powerpc64le-unknown-linux-gnu`,
 `s390x-unknown-linux-gnu`, `aarch64_be-unknown-linux-gnu`,
-`armeb-unknown-linux-gnueabi`, `riscv64-unknown-linux-gnu` and
-`riscv32-unknown-linux-gnu`. The Windows archive is
+`armeb-unknown-linux-gnueabi`, `riscv64-unknown-linux-gnu`,
+`riscv32-unknown-linux-gnu`, `loongarch64-unknown-linux-gnu` and
+`sparc64-unknown-linux-gnu`. The Windows archive is
 `x86_64-pc-windows-msvc`.
 
 `scripts/prebuild-all.sh` produces an equivalent local layout under `dist/`.

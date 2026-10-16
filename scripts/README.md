@@ -103,7 +103,8 @@ All 19 cross-target context-switch backends are vendored under `src/arch/` and
 wired into the build; `scripts/build-all.sh` builds and runs each of them under
 the matching qemu-user emulator with the population-floor assertion enforced
 (C and C++ suites alike). Windows (MSVC x64, PE/MASM backend) is covered by
-native Windows builds.
+native Windows builds; macOS x86_64 and arm64 (Mach-O backends) are covered by
+native macOS builds -- both without toolchain files.
 
 - `mips32_n32_elf_gas.S` (MIPS N32, both endiannesses) is hand-written for
   corocc -- a derivative of the o32/n64 structure (see `THIRD-PARTY.md`).

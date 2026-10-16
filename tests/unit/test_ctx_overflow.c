@@ -126,7 +126,16 @@ static void run_tests(void) {
        their own exit code instead. Only a normal exit means the guard
        failed. */
     if (WIFSIGNALED(status)) {
+#if defined(__APPLE__)
+        /* Darwin reports a PROT_NONE access as
+           EXC_BAD_ACCESS/KERN_PROTECTION_FAILURE, which terminates the
+           process with SIGBUS (not the SIGSEGV Linux raises for the same
+           access); the guard page still caught the overflow. */
+        CHECK(WTERMSIG(status) == SIGBUS || WTERMSIG(status) == SIGSEGV ||
+              WTERMSIG(status) == SIGABRT);
+#else
         CHECK(WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGABRT);
+#endif
     } else if (WIFEXITED(status)) {
         CHECK(WEXITSTATUS(status) != 0);
         CHECK(!(WEXITSTATUS(status) == 2) &&

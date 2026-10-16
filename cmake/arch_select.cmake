@@ -29,9 +29,12 @@
 #   riscv32        riscv32_sysv_elf_gas.S             little (adapted from riscv64)
 #   loongarch64    loongarch64_sysv_elf_gas.S         little
 #   sparc64        sparc64_sysv_elf_gas.S             big
+#   x86_64_macho   x86_64_sysv_macho_gas.S            (macOS)
+#   arm64_macho    arm64_aapcs_macho_gas.S            (macOS)
 #
 # When COROCC_ABI is unset (plain native builds), the historical heuristics
-# are kept: MSVC x64 -> PE/MASM, x86_64 -> SysV ELF, aarch64 -> AAPCS.
+# are kept: MSVC x64 -> PE/MASM, x86_64 -> SysV ELF, aarch64 -> AAPCS; on
+# Apple hosts the same x86_64/aarch64 probes select the Mach-O backends.
 
 set(COROCC_ABI_x86_64_sysv "src/arch/x86_64_sysv_elf_gas.S")
 set(COROCC_ABI_i386_sysv   "src/arch/i386_sysv_elf_gas.S")
@@ -53,6 +56,8 @@ set(COROCC_ABI_riscv64     "src/arch/riscv64_sysv_elf_gas.S")
 set(COROCC_ABI_riscv32     "src/arch/riscv32_sysv_elf_gas.S")
 set(COROCC_ABI_loongarch64 "src/arch/loongarch64_sysv_elf_gas.S")
 set(COROCC_ABI_sparc64     "src/arch/sparc64_sysv_elf_gas.S")
+set(COROCC_ABI_x86_64_macho "src/arch/x86_64_sysv_macho_gas.S")
+set(COROCC_ABI_arm64_macho  "src/arch/arm64_aapcs_macho_gas.S")
 
 function(corocc_use_ms_pe_backend)
     # Windows x64: the PE/MASM context-switch backend (Boost.Context ms_pe,
@@ -91,6 +96,10 @@ if (DEFINED COROCC_ABI)
     endif()
 elseif (MSVC AND (CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64"))
     corocc_use_ms_pe_backend()
+elseif (APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64"))
+    target_sources(corocc PRIVATE src/arch/x86_64_sysv_macho_gas.S)
+elseif (APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))
+    target_sources(corocc PRIVATE src/arch/arm64_aapcs_macho_gas.S)
 elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     target_sources(corocc PRIVATE src/arch/x86_64_sysv_elf_gas.S)
 elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")

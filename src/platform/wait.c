@@ -5,9 +5,12 @@
  *
  * Two implementations behind the same contract. The POSIX branch keeps the
  * pthread form the runtime always used (the condition variable is bound to
- * CLOCK_MONOTONIC so timed waits share the scheduler's deadline scale). The
- * Windows branch follows the Windows-backend shape: SRWLOCK plus
- * CONDITION_VARIABLE, SleepConditionVariableSRW for the waits, with the
+ * CLOCK_MONOTONIC so timed waits share the scheduler's deadline scale; on
+ * macOS, which lacks pthread_condattr_setclock and runs condition variables
+ * on the realtime clock, the timed wait converts the monotonic deadline to
+ * realtime and re-arms after every ETIMEDOUT, keeping the same never-early
+ * property). The Windows branch follows the Windows-backend shape: SRWLOCK
+ * plus CONDITION_VARIABLE, SleepConditionVariableSRW for the waits, with the
  * absolute monotone deadline converted to relative milliseconds and
  * re-derived after every wakeup, so a spurious wakeup cannot fake a
  * completion. Windows timers are tick-slaved -- a timeout can fire a little
@@ -101,11 +104,26 @@ int coro_wait_block_until(coro_wait* w, uint64_t deadline) {
 
 #else /* !_WIN32 */
 
+#if defined(__APPLE__)
+#include <errno.h>      /* ETIMEDOUT */
+#include <sys/time.h>   /* gettimeofday: realtime base for the cond wait */
+#include "scheduler/timer.h" /* coro_monotonic_ns */
+#endif
+
 int coro_wait_init(coro_wait* w) {
-    pthread_condattr_t attr;
     if (!w) return -1;
     w->done = 0;
     if (pthread_mutex_init(&w->lock, NULL) != 0) return -1;
+#if defined(__APPLE__)
+    /* macOS: no pthread_condattr_setclock; the condition variable stays on
+       the realtime clock and the timed wait below converts its deadline. */
+    if (pthread_cond_init(&w->cond, NULL) != 0) {
+        pthread_mutex_destroy(&w->lock);
+        return -1;
+    }
+    return 0;
+#else
+    pthread_condattr_t attr;
     /* Bind the condition variable to the monotone clock so timed waits use the
        same scale as the scheduler's timer deadlines. */
     if (pthread_condattr_init(&attr) != 0) {
@@ -124,6 +142,7 @@ int coro_wait_init(coro_wait* w) {
     }
     pthread_condattr_destroy(&attr);
     return 0;
+#endif
 }
 
 int coro_wait_destroy(coro_wait* w) {
@@ -164,16 +183,40 @@ int coro_wait_reset(coro_wait* w) {
 }
 
 int coro_wait_block_until(coro_wait* w, uint64_t deadline) {
-    struct timespec ts;
     int result = -1;
-    int rc;
     if (!w) return -1;
-    ts.tv_sec = (time_t)(deadline / 1000000000ull);
-    ts.tv_nsec = (long)(deadline % 1000000000ull);
     pthread_mutex_lock(&w->lock);
     while (!w->done) {
+#if defined(__APPLE__)
+        /* realtime-clock conversion, re-armed after every ETIMEDOUT: only the
+           monotonic deadline below decides when the timeout is reported, so a
+           wall-clock step cannot end the wait early (see file header). */
+        uint64_t now = coro_monotonic_ns();
+        uint64_t rem;
+        struct timeval tv;
+        struct timespec ts;
+        int rc;
+        if (now >= deadline) break;
+        rem = deadline - now;
+        if (gettimeofday(&tv, NULL) != 0) break;
+        ts.tv_sec  = tv.tv_sec + (time_t)(rem / 1000000000ull);
+        ts.tv_nsec = (long)tv.tv_usec * 1000L + (long)(rem % 1000000000ull);
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+        rc = pthread_cond_timedwait(&w->cond, &w->lock, &ts);
+        if (rc == 0) continue;
+        if (rc != ETIMEDOUT) break;
+        /* ETIMEDOUT: loop re-checks the monotonic deadline. */
+#else
+        struct timespec ts;
+        int rc;
+        ts.tv_sec = (time_t)(deadline / 1000000000ull);
+        ts.tv_nsec = (long)(deadline % 1000000000ull);
         rc = pthread_cond_timedwait(&w->cond, &w->lock, &ts);
         if (rc != 0) break; /* timeout, or an error the caller may inspect */
+#endif
     }
     result = w->done ? 0 : 1;
     pthread_mutex_unlock(&w->lock);

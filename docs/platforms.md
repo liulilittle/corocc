@@ -12,8 +12,8 @@ entry points live in [building.md](building.md).
 
 | Axis | Supported |
 | --- | --- |
-| Operating systems | Linux (glibc), Windows (x64), Android (compile and link; NDK r26+) |
-| Compilers | GCC and Clang (the Ubuntu 24.04 toolchains — GCC 13 / Clang 18 — in CI and local runs), MSVC (Visual Studio 2022, `/W4 /WX`) |
+| Operating systems | Linux (glibc), Windows (x64), macOS (x86_64 and Apple Silicon arm64), Android (compile and link; NDK r26+) |
+| Compilers | GCC and Clang (the Ubuntu 24.04 toolchains — GCC 13 / Clang 18 — in CI and local runs), MSVC (Visual Studio 2022, `/W4 /WX`), Apple clang (Xcode, CI macOS runners) |
 | Library language | C99 (headers compile as C99 and C++11) |
 | Wrapper language | C++11 (verified through C++20 as a forward check; MSVC baseline `/std:c++14`) |
 | Build system | CMake >= 3.16 (Ninja or Make; Visual Studio generator on Windows) |
@@ -33,6 +33,8 @@ Native targets:
 | --- | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | x86-64 SysV ELF | LP64 | CI native jobs (GCC + Clang) and full suite locally |
 | `x86_64-pc-windows-msvc` | x86-64 PE (MASM backend) | LLP64 | CI Windows job and full suite locally |
+| macOS x86_64 (`macos-x64` job) | x86-64 Mach-O | LP64 | CI macOS x64 job (Apple clang, full suite) |
+| macOS arm64 (`macos-arm64` job) | aarch64 Mach-O | LP64 | CI macOS arm64 job (Apple clang, full suite) |
 
 Cross targets — each one is built and its test suite executed under
 `qemu-user` in CI, and the ABI probe re-runs on every one of these toolchains
@@ -57,6 +59,8 @@ available locally (see [ABI.md](ABI.md) for the layout results):
 | `s390x-unknown-linux-gnu` | s390x BE | LP64 | `qemu-s390x` | yes (plus full suite) |
 | `riscv64-unknown-linux-gnu` | riscv64 (RV64GC/LP64D) | LP64 | `qemu-riscv64` | yes |
 | `riscv32-unknown-linux-gnu` | riscv32 (RV32GC/ILP32D) | ILP32 | `qemu-riscv32` | prebuilt toolchain |
+| `loongarch64-unknown-linux-gnu` | loongarch64 LE (LP64D) | LP64 | `qemu-loongarch64` | yes (plus full suite; vendored backend, Boost 1.92.0) |
+| `sparc64-unknown-linux-gnu` | sparc64 BE (V9) | LP64 | `qemu-sparc64` | yes (plus full suite; vendored backend, Boost 1.92.0) |
 
 "Prebuilt toolchain" rows use the sha256-verified toolchain/sysroot assets
 fetched by `scripts/ci/fetch-toolchain-assets.sh` (same flow in CI and
@@ -68,7 +72,17 @@ except i386 (4-byte), exactly as detailed in [ABI.md](ABI.md).
 
 The context-switch backends are vendored under `src/arch/` and selected by
 `cmake/arch_select.cmake`; the hand-written and derivative backends are
-documented in `THIRD-PARTY.md`.
+documented in `THIRD-PARTY.md`. macOS is a native build using the Mach-O
+backends (`x86_64_sysv_macho_gas.S` / `arm64_aapcs_macho_gas.S`), selected by
+the same heuristics when the host is Apple.
+
+macOS platform notes: `pthread_condattr_setclock` does not exist on Darwin,
+so the condition-variable shim runs on the default realtime clock and
+converts its monotonic deadlines per call (re-arming after `ETIMEDOUT`, so a
+timeout is never reported early); `MAP_ANON` is used as the spelling of the
+anonymous mapping flag; and a guard-page overflow terminates with `SIGBUS`
+(Darwin reports `PROT_NONE` accesses as `KERN_PROTECTION_FAILURE`), which
+the overflow suite accepts alongside Linux's `SIGSEGV`.
 
 ## Android
 
@@ -102,8 +116,9 @@ push and pull request:
 | `native-arm64` | Full suite on an ARM64 Linux runner. |
 | `asan`, `tsan`, `nospin` | The instrumented configurations above, with registered/executed test-population floors asserted. |
 | `headers` | Header conformance: public headers compile standalone as C99 and C++11 under strict warnings. |
-| `cross` (17 jobs) | One job per cross ABI: build with the cross toolchain and run the CTest suite under the matching `qemu-user`. |
+| `cross` (19 jobs) | One job per cross ABI: build with the cross toolchain and run the CTest suite under the matching `qemu-user`. |
 | `windows-msvc` | Visual Studio 2022 x64 build (Debug + Release) and the Release test suite. |
+| `macos-x64`, `macos-arm64` | Native macOS builds (Apple clang) and the full Release test suite on Intel (`macos-15-intel`) and Apple Silicon (`macos-15`). |
 | `ndk` (2 jobs) | Android NDK compile+link for `arm64-v8a` and `x86_64`. |
 | `ci-summary` | Aggregates the jobs; a skipped job fails the summary unless explicitly whitelisted. |
 
@@ -146,6 +161,6 @@ scripts/ci/fetch-toolchain-assets.sh riscv32-linux-gnu   # only for the asset ro
 scripts/build-all.sh --abi riscv32
 ```
 
-`scripts/build-all.sh` with no arguments walks the entire 17-site matrix;
+`scripts/build-all.sh` with no arguments walks the entire 19-site matrix;
 `scripts/build-all.sh --abi <name>` runs one site. The per-site logs land
 under the log directory described in `scripts/README.md`.

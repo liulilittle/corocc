@@ -30,6 +30,27 @@ ctest --test-dir build --output-on-failure
 The test-count formula (plain Linux 43, `+1` with Boost.Context, `+1` in a
 Release build, `-1` on Windows) is detailed in the repository README.
 
+### Build and test (macOS)
+
+macOS x86_64 and Apple Silicon arm64 are native targets: the Mach-O
+context-switch backends are selected automatically from the host
+architecture, so no toolchain file is needed (Xcode Command Line Tools
+provide the compiler and SDK).
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2
+ctest --test-dir build -E cpp_perf --output-on-failure
+```
+
+`-E cpp_perf` mirrors the CI macOS jobs and every other gated site: the
+throughput gate is a Linux-site concern on shared runners; the functional
+population (43 tests) runs in full. macOS specifics that the build handles
+for you: the condition-variable shim converts its monotonic deadlines to the
+platform's realtime cond clock, `MAP_ANON` is used for stack mappings, and
+guard-page overflow terminates with `SIGBUS`, which the overflow suite
+accepts.
+
 ### Build options
 
 | Option | Default | Effect |
@@ -148,9 +169,10 @@ The published Linux triples are `x86_64-unknown-linux-gnu`,
 `powerpc-unknown-linux-gnu`, `powerpc64-unknown-linux-gnu`,
 `powerpc64le-unknown-linux-gnu`, `s390x-unknown-linux-gnu`,
 `aarch64_be-unknown-linux-gnu`, `armeb-unknown-linux-gnueabi`,
-`riscv64-unknown-linux-gnu` and `riscv32-unknown-linux-gnu`, plus the Windows
-`x86_64-pc-windows-msvc`. Each triple is its own ABI package: archives are
-not interchangeable across triples.
+`riscv64-unknown-linux-gnu`, `riscv32-unknown-linux-gnu`,
+`loongarch64-unknown-linux-gnu` and `sparc64-unknown-linux-gnu`, plus the
+Windows `x86_64-pc-windows-msvc`. Each triple is its own ABI package:
+archives are not interchangeable across triples.
 
 `scripts/prebuild-all.sh` produces an equivalent local layout under `dist/`.
 

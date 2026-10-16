@@ -222,6 +222,35 @@ jobs:
         # is empty, so cpp_perf is never registered here; the script-level
         # -E cpp_perf applies to the other jobs.
 
+  # macOS native sites (Mach-O backends vendored from Boost.Context; see
+  # src/arch/x86_64_sysv_macho_gas.S and src/arch/arm64_aapcs_macho_gas.S).
+  # Runner labels: the originally pinned `macos-13` was retired in Dec 2025
+  # (GitHub changelog 2025-09-19); `macos-15-intel` is GitHub's designated
+  # x86_64 successor -- the last Intel image, supported through Aug 2027 --
+  # and `macos-15` is the current arm64 image (`macos-14` itself retires on
+  # 2026-11-02, changelog 2026-10-01). This is the same runner-drift pinning
+  # policy as windows-msvc below. The jobs run the full ctest population
+  # (43 entries: C + C++ suites); cpp_perf stays excluded like every other
+  # gated site -- the loose performance gate is a Linux-site concern and
+  # macOS runners are shared.
+  macos-x64:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build -E cpp_perf -j 2 --output-on-failure --timeout 300
+
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build -E cpp_perf -j 2 --output-on-failure --timeout 300
+
   ndk:
     name: ndk ${{ matrix.android_abi }}
     runs-on: ubuntu-24.04
@@ -265,7 +294,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, ndk]
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, cross, windows-msvc, macos-x64, macos-arm64, ndk]
     # NOTE: perf-report is intentionally NOT in needs (non-required).
     runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
     timeout-minutes: 5
@@ -283,6 +312,8 @@ jobs:
           R_BOOST_ASIO: ${{ needs.boost-asio.result }}
           R_CROSS: ${{ needs.cross.result }}
           R_WINDOWS: ${{ needs.windows-msvc.result }}
+          R_MACOS_X64: ${{ needs.macos-x64.result }}
+          R_MACOS_ARM64: ${{ needs.macos-arm64.result }}
           R_NDK: ${{ needs.ndk.result }}
         run: |
           set -u
@@ -305,5 +336,7 @@ jobs:
           report boost-asio      "$R_BOOST_ASIO"
           report cross           "$R_CROSS"
           report windows-msvc    "$R_WINDOWS"
+          report macos-x64       "$R_MACOS_X64"
+          report macos-arm64     "$R_MACOS_ARM64"
           report ndk             "$R_NDK"
           exit "$fail"

@@ -21,7 +21,8 @@ target_link_libraries(test_ctx_pingpong PRIVATE corocc)
 add_test(NAME ctx_pingpong COMMAND test_ctx_pingpong)
 
 # The overflow is exercised in a child process: the child faults on the
-# guard page (SIGSEGV), and the parent asserts that death-by-SIGSEGV is what
+# guard page (SIGSEGV on Linux, SIGBUS on Darwin's protection-fault
+# delivery), and the parent asserts that death-by-signal is what
 # happened. The test itself passes when that holds.
 add_executable(test_ctx_overflow unit/test_ctx_overflow.c)
 target_link_libraries(test_ctx_overflow PRIVATE corocc)

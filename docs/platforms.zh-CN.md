@@ -11,8 +11,8 @@
 
 | 维度 | 支持范围 |
 | --- | --- |
-| 操作系统 | Linux(glibc)、Windows(x64)、Android(编译+链接;NDK r26+) |
-| 编译器 | GCC 与 Clang(CI 与本机使用 Ubuntu 24.04 工具链——GCC 13 / Clang 18)、MSVC(Visual Studio 2022,`/W4 /WX`) |
+| 操作系统 | Linux(glibc)、Windows(x64)、macOS(x86_64 与 Apple Silicon arm64)、Android(编译+链接;NDK r26+) |
+| 编译器 | GCC 与 Clang(CI 与本机使用 Ubuntu 24.04 工具链——GCC 13 / Clang 18)、MSVC(Visual Studio 2022,`/W4 /WX`)、Apple clang(Xcode,CI macOS 运行器) |
 | 库语言 | C99(头文件可作 C99 与 C++11 编译) |
 | 封装语言 | C++11(经 C++20 前向验证;MSVC 基线 `/std:c++14`) |
 | 构建系统 | CMake >= 3.16(Ninja 或 Make;Windows 可用 Visual Studio 生成器) |
@@ -31,6 +31,8 @@
 | --- | --- | --- | --- |
 | `x86_64-unknown-linux-gnu` | x86-64 SysV ELF | LP64 | CI native 任务(GCC + Clang)且本机全量套件通过 |
 | `x86_64-pc-windows-msvc` | x86-64 PE(MASM 后端) | LLP64 | CI Windows 任务且本机全量套件通过 |
+| macOS x86_64(`macos-x64` 任务) | x86-64 Mach-O | LP64 | CI macOS x64 任务(Apple clang,全量套件) |
+| macOS arm64(`macos-arm64` 任务) | aarch64 Mach-O | LP64 | CI macOS arm64 任务(Apple clang,全量套件) |
 
 交叉目标——每个都在 CI 中构建并在对应的 `qemu-user` 下执行测试套件;在全部
 本机可用的这些工具链上还复跑了 ABI 探针(布局结果见
@@ -55,6 +57,8 @@
 | `s390x-unknown-linux-gnu` | s390x BE | LP64 | `qemu-s390x` | 是(另附全量套件) |
 | `riscv64-unknown-linux-gnu` | riscv64(RV64GC/LP64D) | LP64 | `qemu-riscv64` | 是 |
 | `riscv32-unknown-linux-gnu` | riscv32(RV32GC/ILP32D) | ILP32 | `qemu-riscv32` | 预构建工具链 |
+| `loongarch64-unknown-linux-gnu` | loongarch64 LE(LP64D) | LP64 | `qemu-loongarch64` | 是(另附全量套件;vendored 后端,Boost 1.92.0) |
+| `sparc64-unknown-linux-gnu` | sparc64 BE(V9) | LP64 | `qemu-sparc64` | 是(另附全量套件;vendored 后端,Boost 1.92.0) |
 
 "预构建工具链"行使用由 `scripts/ci/fetch-toolchain-assets.sh` 拉取并做
 sha256 校验的工具链/sysroot 资产(CI 与本机同一流程)。"本机探针"表示在本次
@@ -64,7 +68,15 @@ CTest 套件也在本机经 `qemu-user` 跑过。32 位各行的 "ILP32" 默认�
 为准。
 
 上下文切换后端 vendored 于 `src/arch/`,由 `cmake/arch_select.cmake` 选择;
-手写与衍生后端记录在 `THIRD-PARTY.md`。
+手写与衍生后端记录在 `THIRD-PARTY.md`。macOS 属本机构建,使用 Mach-O 后端
+(`x86_64_sysv_macho_gas.S` / `arm64_aapcs_macho_gas.S`),宿主机为 Apple 时
+经同一组启发式选择。
+
+macOS 平台注记:Darwin 没有 `pthread_condattr_setclock`,条件变量垫片因此
+运行在默认实时时钟上,并在每次调用时把单调时钟期限换算为实时时刻
+(`ETIMEDOUT` 后重新武装,超时永不提前上报);匿名映射旗标使用 `MAP_ANON`
+拼写;守护页溢出让进程以 `SIGBUS` 终止(Darwin 将 `PROT_NONE` 访问报告为
+`KERN_PROTECTION_FAILURE`),溢出套件在 Linux 的 `SIGSEGV` 之外同时接受它。
 
 ## Android
 
@@ -96,8 +108,9 @@ ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 �
 | `native-arm64` | ARM64 Linux 运行器上的全量套件。 |
 | `asan`、`tsan`、`nospin` | 上表插桩配置,并断言注册/执行的测试数量下限。 |
 | `headers` | 头文件一致性:公开头在严格告警下可独立按 C99 与 C++11 编译。 |
-| `cross`(17 个任务) | 每个交叉 ABI 一个任务:交叉工具链构建 + 对应 `qemu-user` 下运行 CTest 套件。 |
+| `cross`(19 个任务) | 每个交叉 ABI 一个任务:交叉工具链构建 + 对应 `qemu-user` 下运行 CTest 套件。 |
 | `windows-msvc` | Visual Studio 2022 x64 构建(Debug + Release)与 Release 测试套件。 |
+| `macos-x64`、`macos-arm64` | macOS 原生构建(Apple clang)+ Release 全量测试套件,分别覆盖 Intel(`macos-15-intel`)与 Apple Silicon(`macos-15`)。 |
 | `ndk`(2 个任务) | Android NDK 对 `arm64-v8a` 与 `x86_64` 的编译+链接。 |
 | `ci-summary` | 汇总各任务;除显式白名单外,被跳过(skipped)的任务会使汇总失败。 |
 
@@ -134,6 +147,6 @@ scripts/ci/fetch-toolchain-assets.sh riscv32-linux-gnu   # 仅资产行需要
 scripts/build-all.sh --abi riscv32
 ```
 
-`scripts/build-all.sh` 不带参数会走完 17 个站点的完整矩阵;
+`scripts/build-all.sh` 不带参数会走完 19 个站点的完整矩阵;
 `scripts/build-all.sh --abi <名称>` 只跑一个站点。每个站点的日志落在
 `scripts/README.md` 所述的日志目录下。
