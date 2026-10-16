@@ -43,6 +43,7 @@
 | `aarch64-unknown-linux-gnu` | aarch64 LE(AAPCS) | LP64 | `qemu-aarch64` | 是(另附全量套件) |
 | `aarch64_be-unknown-linux-gnu` | aarch64 BE | LP64 | `qemu-aarch64_be` | 预构建工具链 |
 | `arm-linux-gnueabihf` | armv7 LE(硬浮点) | ILP32 | `qemu-arm` | 是 |
+| `arm-linux-gnueabi`(armel) | armv5t LE 软浮点(EABI) | ILP32 | `qemu-arm` | 是(另附全量套件) |
 | `armeb-unknown-linux-gnueabi` | armv7 BE | ILP32 | `qemu-armeb` | 预构建工具链 |
 | `i386-unknown-linux-gnu` | x86 32 位 | ILP32(`uint64_t` 4 字节对齐) | `qemu-i386` | 是(本机 `-m32`) |
 | `mips-unknown-linux-gnu` | MIPS o32 BE | ILP32 | `qemu-mips` | 是 |
@@ -108,7 +109,7 @@ ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 �
 | `native-arm64` | ARM64 Linux 运行器上的全量套件。 |
 | `asan`、`tsan`、`nospin` | 上表插桩配置,并断言注册/执行的测试数量下限。 |
 | `headers` | 头文件一致性:公开头在严格告警下可独立按 C99 与 C++11 编译。 |
-| `cross`(19 个任务) | 每个交叉 ABI 一个任务:交叉工具链构建 + 对应 `qemu-user` 下运行 CTest 套件。 |
+| `cross`(20 个任务) | 每个交叉 ABI 一个任务:交叉工具链构建 + 对应 `qemu-user` 下运行 CTest 套件。 |
 | `windows-msvc` | Visual Studio 2022 x64 构建(Debug + Release)与 Release 测试套件。 |
 | `macos-x64`、`macos-arm64` | macOS 原生构建(Apple clang)+ Release 全量测试套件,分别覆盖 Intel(`macos-15-intel`)与 Apple Silicon(`macos-15`)。 |
 | `ndk`(2 个任务) | Android NDK 对 `arm64-v8a` 与 `x86_64` 的编译+链接。 |
@@ -147,6 +148,6 @@ scripts/ci/fetch-toolchain-assets.sh riscv32-linux-gnu   # 仅资产行需要
 scripts/build-all.sh --abi riscv32
 ```
 
-`scripts/build-all.sh` 不带参数会走完 19 个站点的完整矩阵;
+`scripts/build-all.sh` 不带参数会走完 20 个站点的完整矩阵;
 `scripts/build-all.sh --abi <名称>` 只跑一个站点。每个站点的日志落在
 `scripts/README.md` 所述的日志目录下。

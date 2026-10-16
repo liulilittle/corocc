@@ -45,6 +45,7 @@ available locally (see [ABI.md](ABI.md) for the layout results):
 | `aarch64-unknown-linux-gnu` | aarch64 LE (AAPCS) | LP64 | `qemu-aarch64` | yes (plus full suite) |
 | `aarch64_be-unknown-linux-gnu` | aarch64 BE | LP64 | `qemu-aarch64_be` | prebuilt toolchain |
 | `arm-linux-gnueabihf` | armv7 LE (hard-float) | ILP32 | `qemu-arm` | yes |
+| `arm-linux-gnueabi` (armel) | armv5t LE soft-float (EABI) | ILP32 | `qemu-arm` | yes (plus full suite) |
 | `armeb-unknown-linux-gnueabi` | armv7 BE | ILP32 | `qemu-armeb` | prebuilt toolchain |
 | `i386-unknown-linux-gnu` | x86 32-bit | ILP32 (4-byte `uint64_t`) | `qemu-i386` | yes (host `-m32`) |
 | `mips-unknown-linux-gnu` | MIPS o32 BE | ILP32 | `qemu-mips` | yes |
@@ -116,7 +117,7 @@ push and pull request:
 | `native-arm64` | Full suite on an ARM64 Linux runner. |
 | `asan`, `tsan`, `nospin` | The instrumented configurations above, with registered/executed test-population floors asserted. |
 | `headers` | Header conformance: public headers compile standalone as C99 and C++11 under strict warnings. |
-| `cross` (19 jobs) | One job per cross ABI: build with the cross toolchain and run the CTest suite under the matching `qemu-user`. |
+| `cross` (20 jobs) | One job per cross ABI: build with the cross toolchain and run the CTest suite under the matching `qemu-user`. |
 | `windows-msvc` | Visual Studio 2022 x64 build (Debug + Release) and the Release test suite. |
 | `macos-x64`, `macos-arm64` | Native macOS builds (Apple clang) and the full Release test suite on Intel (`macos-15-intel`) and Apple Silicon (`macos-15`). |
 | `ndk` (2 jobs) | Android NDK compile+link for `arm64-v8a` and `x86_64`. |
@@ -161,6 +162,6 @@ scripts/ci/fetch-toolchain-assets.sh riscv32-linux-gnu   # only for the asset ro
 scripts/build-all.sh --abi riscv32
 ```
 
-`scripts/build-all.sh` with no arguments walks the entire 19-site matrix;
+`scripts/build-all.sh` with no arguments walks the entire 20-site matrix;
 `scripts/build-all.sh --abi <name>` runs one site. The per-site logs land
 under the log directory described in `scripts/README.md`.

@@ -162,9 +162,9 @@ target_link_libraries(myapp PRIVATE corocc::corocc)
 ```
 
 The published Linux triples are `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, `arm-linux-gnueabihf`, `i386-unknown-linux-gnu`,
-`mips-unknown-linux-gnu`, `mipsel-unknown-linux-gnu`,
-`mips64-unknown-linux-gnuabi64`, `mips64el-unknown-linux-gnuabi64`,
+`aarch64-unknown-linux-gnu`, `arm-linux-gnueabihf`, `arm-linux-gnueabi`,
+`i386-unknown-linux-gnu`, `mips-unknown-linux-gnu`,
+`mipsel-unknown-linux-gnu`, `mips64-unknown-linux-gnuabi64`, `mips64el-unknown-linux-gnuabi64`,
 `mips64-unknown-linux-gnuabin32`, `mips64el-unknown-linux-gnuabin32`,
 `powerpc-unknown-linux-gnu`, `powerpc64-unknown-linux-gnu`,
 `powerpc64le-unknown-linux-gnu`, `s390x-unknown-linux-gnu`,

@@ -31,6 +31,7 @@ TARGETS=(
   "aarch64_be|scripts/toolchains/aarch64_be.cmake"
   "i386|scripts/toolchains/i386.cmake"
   "arm32|scripts/toolchains/arm32.cmake"
+  "armel|scripts/toolchains/armel.cmake"
   "armeb|scripts/toolchains/armeb.cmake"
   "mips32|scripts/toolchains/mips32.cmake"
   "mips32el|scripts/toolchains/mips32el.cmake"

@@ -8,7 +8,7 @@ cross compiler and the QEMU user-mode emulator for that ISA.
 | Script | Purpose |
 | --- | --- |
 | `build.sh` | Native configure + build + ctest + benchmark. Honors `CC`, `CXX`, `BUILD_DIR`, `CMAKE_ARGS`, `CMAKE_GENERATOR`. |
-| `build-all.sh` | Builds and qemu-tests every cross ABI (19 targets) by delegating to `ci/build-test.sh`; supports `--abi <name>` for a single target. |
+| `build-all.sh` | Builds and qemu-tests every cross ABI (20 targets) by delegating to `ci/build-test.sh`; supports `--abi <name>` for a single target. |
 | `ci/build-test.sh` | Single-site driver shared with the GitHub Actions CI: configure, static build, qemu ctest and the registered/executed population-floor assertion (`--matrix-env`, see below). |
 | `prebuild-all.sh` | Builds the supported variants and stages `dist/<triple>/{lib,include}` for drop-in consumption. |
 | `ci-local.sh` | Local mirror of the CI pipeline: workflow YAML parse/lint, shellcheck, header conformance, native + cross sites, optional toolchain-asset rehearsal and a release-publish smoke test. |
@@ -75,6 +75,7 @@ extra suites such as Boost coexistence still passes.
 | `aarch64_be.cmake` | `aarch64_be-linux-gnu` (prebuilt toolchain + sysroot assets) | `qemu-aarch64_be` |
 | `i386.cmake` | host `gcc`/`g++` with `-m32` | `qemu-i386` |
 | `arm32.cmake` | `arm-linux-gnueabihf` | `qemu-arm` |
+| `armel.cmake` | `arm-linux-gnueabi` (soft-float EABI, `-gcc-13`) | `qemu-arm` |
 | `armeb.cmake` | `armeb-linux-gnueabi` (prebuilt toolchain + sysroot assets) | `qemu-armeb` |
 | `mips32.cmake` | `mips-linux-gnu` | `qemu-mips` |
 | `mips32el.cmake` | `mipsel-linux-gnu` | `qemu-mipsel` |
@@ -99,7 +100,7 @@ verifies them against `ci/toolchain-assets.sha256` and unpacks them under
 
 ## Backend notes
 
-All 19 cross-target context-switch backends are vendored under `src/arch/` and
+All 20 cross-target context-switch backends are vendored under `src/arch/` and
 wired into the build; `scripts/build-all.sh` builds and runs each of them under
 the matching qemu-user emulator with the population-floor assertion enforced
 (C and C++ suites alike). Windows (MSVC x64, PE/MASM backend) is covered by

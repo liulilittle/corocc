@@ -152,7 +152,7 @@ target_link_libraries(myapp PRIVATE corocc::corocc)
 
 发布工作流覆盖的 Linux 三元组:`x86_64-unknown-linux-gnu`、
 `aarch64-unknown-linux-gnu`、`arm-linux-gnueabihf`、
-`i386-unknown-linux-gnu`、`mips-unknown-linux-gnu`、
+`arm-linux-gnueabi`、`i386-unknown-linux-gnu`、`mips-unknown-linux-gnu`、
 `mipsel-unknown-linux-gnu`、`mips64-unknown-linux-gnuabi64`、
 `mips64el-unknown-linux-gnuabi64`、`mips64-unknown-linux-gnuabin32`、
 `mips64el-unknown-linux-gnuabin32`、`powerpc-unknown-linux-gnu`、

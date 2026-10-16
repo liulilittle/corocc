@@ -76,6 +76,7 @@ if [ "${SKIP_CROSS:-0}" != "1" ]; then
     CROSS_TARGETS=(
         "aarch64|scripts/toolchains/aarch64.cmake|aarch64-linux-gnu-gcc"
         "armhf|scripts/toolchains/arm32.cmake|arm-linux-gnueabihf-gcc"
+        "armel|scripts/toolchains/armel.cmake|arm-linux-gnueabi-gcc-13"
         "i386|scripts/toolchains/i386.cmake|@gcc-m32"
         "mips_o32|scripts/toolchains/mips32.cmake|mips-linux-gnu-gcc"
         "mipsel_o32|scripts/toolchains/mips32el.cmake|mipsel-linux-gnu-gcc"

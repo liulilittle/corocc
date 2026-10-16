@@ -142,6 +142,7 @@ jobs:
           # test set that the cross gate builds).
           - { abi: aarch64,      toolchain: scripts/toolchains/aarch64.cmake,  apt: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu", assets: "" }
           - { abi: armhf,        toolchain: scripts/toolchains/arm32.cmake,    apt: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf", assets: "" }
+          - { abi: armel,        toolchain: scripts/toolchains/armel.cmake,    apt: "gcc-13-arm-linux-gnueabi g++-13-arm-linux-gnueabi libc6-dev-armel-cross", assets: "" }  # versioned drivers only; libc headers via libc6-dev-armel-cross (also a hard dep of libstdc++-13-dev-armel-cross; kept explicit)
           - { abi: i386,         toolchain: scripts/toolchains/i386.cmake,     apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }          # C-only ABI: the C++ suites are gated out, but 32-bit libstdc++(.a) is needed for CMake's CXX detection link (-static)
           - { abi: mips_o32,     toolchain: scripts/toolchains/mips32.cmake,   apt: "gcc-mips-linux-gnu g++-mips-linux-gnu", assets: "" }
           - { abi: mipsel_o32,   toolchain: scripts/toolchains/mips32el.cmake, apt: "gcc-mipsel-linux-gnu g++-mipsel-linux-gnu", assets: "" }

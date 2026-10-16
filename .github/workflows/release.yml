@@ -25,6 +25,7 @@ jobs:
           - { abi: native-gcc,   triple: x86_64-unknown-linux-gnu, toolchain: "", apt: "", assets: "" }
           - { abi: aarch64,      triple: aarch64-unknown-linux-gnu, toolchain: scripts/toolchains/aarch64.cmake, apt: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu", assets: "" }
           - { abi: armhf,        triple: arm-linux-gnueabihf, toolchain: scripts/toolchains/arm32.cmake, apt: "gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf", assets: "" }
+          - { abi: armel,        triple: arm-linux-gnueabi, toolchain: scripts/toolchains/armel.cmake, apt: "gcc-13-arm-linux-gnueabi g++-13-arm-linux-gnueabi libc6-dev-armel-cross", assets: "" }
           - { abi: i386,         triple: i386-unknown-linux-gnu, toolchain: scripts/toolchains/i386.cmake, apt: "libc6-dev-i386 lib32gcc-13-dev lib32stdc++-13-dev", assets: "" }
           - { abi: mips_o32,     triple: mips-unknown-linux-gnu, toolchain: scripts/toolchains/mips32.cmake, apt: "gcc-mips-linux-gnu g++-mips-linux-gnu", assets: "" }
           - { abi: mipsel_o32,   triple: mipsel-unknown-linux-gnu, toolchain: scripts/toolchains/mips32el.cmake, apt: "gcc-mipsel-linux-gnu g++-mipsel-linux-gnu", assets: "" }
