@@ -13,12 +13,14 @@
  * deque is the shape that gives exactly that: the private end (bottom) is
  * owned by the worker, the public end (top) is shared.
  *
- * Memory model: bottom is a plain field (only the owner writes it, stealers
- * read it with an acquire load), top is an atomic decremented... rather, both
- * are read/written through the atomic helpers so a stealer that reads a stale
- * bottom sees the store-release ordering the owner publishes. The node array
- * is a fixed ring; when it would overflow the caller falls back to the
- * global overflow pool (see rt.c), which is vanishingly rare.
+ * Memory model: the owner accesses bottom through the relaxed atomic helpers
+ * (a new value is published to stealers with a release store) and reads top
+ * with an acquire load; a stealer reads top (acquire), then bottom, so the
+ * publish/release ordering makes the node the cell points at visible. top is
+ * the CAS target, bottom the owner's private index. The node array is a fixed
+ * ring (WSDEQUE_CAPACITY): the owner must never queue more than the ring can
+ * hold, so a push that would overflow is refused (wsdeque_push returns 0) and
+ * the caller defers the node instead of overwriting a live slot.
  *
  * This header is INTERNAL and compiles as C99.
  */
@@ -38,7 +40,8 @@ typedef struct rt_node rt_node;
 #endif
 
 /* Capacity must be a power of two so the mask drops to &; 4096 keeps the
-   hot-path deque tiny in cache while making overflow essentially unreachable. */
+   hot-path deque tiny in cache. Overflow is not assumed away: wsdeque_push
+   refuses a full ring (see below) rather than wrapping over a live slot. */
 #define WSDEQUE_CAPACITY 4096u
 #define WSDEQUE_MASK     (WSDEQUE_CAPACITY - 1u)
 
@@ -51,8 +54,26 @@ typedef struct wsdeque {
 /** wsdeque_init -- reset a deque to empty. Called once by the owner. */
 void wsdeque_init(wsdeque* d);
 
-/** wsdeque_push -- owner-only push on the private end. Never blocks. */
-void wsdeque_push(wsdeque* d, rt_node* n);
+/**
+ * wsdeque_push -- owner-only push on the private end; never blocks.
+ *
+ * Returns 1 when the node was stored, 0 when the fixed ring is full. A full
+ * ring is refused, never wrapped: overwriting a live slot would strand that
+ * entry's delivery reference and let a later pop read the covering node twice.
+ * On 0 the caller defers the node (its own inbox or its timer heap) until a
+ * pop frees a slot.
+ */
+int wsdeque_push(wsdeque* d, rt_node* n);
+
+/**
+ * wsdeque_full -- owner-only full test for the fixed ring.
+ *
+ * Returns 1 when the ring cannot take another node (bottom - top >=
+ * WSDEQUE_CAPACITY). A stale top snapshot only makes this conservative: it
+ * may report full while a concurrent steal just freed a slot, which merely
+ * defers a push and never overwrites a live cell. Owner only, like push/pop.
+ */
+int wsdeque_full(const wsdeque* d);
 
 /** wsdeque_pop -- owner-only pop from the private end; returns NULL if empty. */
 rt_node* wsdeque_pop(wsdeque* d);

@@ -144,6 +144,14 @@ target_include_directories(test_timer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src
 target_link_libraries(test_timer PRIVATE corocc)
 add_test(NAME timer COMMAND test_timer)
 
+# The work-stealing ring's capacity invariant: a push past WSDEQUE_CAPACITY is
+# refused rather than wrapping over a live slot. Pure deque layer (no runtime),
+# so it is fast and deterministic on every site, cross included.
+add_executable(test_wsdeque_capacity unit/test_wsdeque_capacity.c)
+target_include_directories(test_wsdeque_capacity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(test_wsdeque_capacity PRIVATE corocc)
+add_test(NAME wsdeque_capacity COMMAND test_wsdeque_capacity)
+
 # the single-thread scheduler.
 add_executable(test_sched_spawn unit/test_sched_spawn.c)
 target_link_libraries(test_sched_spawn PRIVATE corocc)

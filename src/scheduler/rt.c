@@ -208,7 +208,13 @@ int rt_node_wake_locked(rt_node* n) {
 }
 
 int rt_node_wake(coro_rt_t* rt, rt_node* n) {
+    /* Self-locking wrapper: rt_node_wake_locked requires act_lock, and
+       signal_activity takes act_lock itself (rt.c:158), so the wake must run
+       inside the lock and the signal after the unlock -- calling it inside
+       would self-deadlock on the non-recursive lock. */
+    coro_plat_mutex_lock(&rt->act_lock);
     int woken = rt_node_wake_locked(n);
+    coro_plat_mutex_unlock(&rt->act_lock);
     signal_activity(rt);
     return woken;
 }
@@ -262,11 +268,22 @@ static void drain_inbox(rt_worker* w) {
             node_clear(n, RT_QUEUED);
             continue;
         }
+        /* Fixed-ring capacity: never route past the ring. Hand the node back
+           to our own inbox and stop this round; the owner drains again once a
+           pop has freed a slot, and worker_sleep's predicate sees the
+           non-empty inbox so it will not sleep with work pending. Checking
+           before the timer/wake-request handling keeps a deferred node's
+           bookkeeping intact (its delivery reference, RT_QUEUED, stays valid
+           because the node is still in a queue). */
+        if (wsdeque_full(&w->queue)) {
+            mpsc_push(&w->inbox, n);
+            break;
+        }
         if (node_test(n, RT_WAKE_REQ)) {
             node_clear(n, RT_WAKE_REQ);
             (void)coro_timer_heap_remove(&w->sleepers, &n->timer);
         }
-        wsdeque_push(&w->queue, n);
+        (void)wsdeque_push(&w->queue, n);
         routed = 1;
     }
     /* A routed entry can outlive the wake's activity signal (the worker was
@@ -285,6 +302,14 @@ static void collect_expired(rt_worker* w) {
     if (w->sleepers.count == 0) return;
     uint64_t now = rt_now(w->rt);
     for (;;) {
+        /* Capacity gate BEFORE popping the heap or claiming the node: a
+           claimed node whose push is then refused would be a dangling
+           delivery reference (RT_QUEUED with no deque slot) and its deadline
+           already off the heap. With the check here the deadline stays on the
+           heap for the next collect. The owner is the only writer of bottom,
+           so a check that passes cannot be invalidated before the push below
+           (a stealer only shrinks the fill). */
+        if (wsdeque_full(&w->queue)) return;
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
         if (!t || t->deadline > now) return;
         t = coro_timer_heap_pop(&w->sleepers);
@@ -293,7 +318,7 @@ static void collect_expired(rt_worker* w) {
            live cancel entry routes the node itself. */
         if (!(node_test(n, RT_DYING | RT_DONE)) &&
             node_cas_clear(n, RT_WAITING) && rt_queue_claim(n)) {
-            wsdeque_push(&w->queue, n);
+            (void)wsdeque_push(&w->queue, n);
             signal_activity(w->rt);
         }
     }
@@ -447,8 +472,18 @@ size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
                            signal: the common single-coroutine yield stays free
                            of any lock/broadcast. */
                         int had_older = !wsdeque_empty(&w->queue);
-                        wsdeque_push(&w->queue, n);
-                        if (had_older) signal_activity(rt);
+                        if (!wsdeque_push(&w->queue, n)) {
+                            /* The fixed ring is full. A pop just freed this
+                               worker's slot, so this is defensive only: hand
+                               the node to our own inbox and raise the signal
+                               so it is routed (and a peer can steal) once a
+                               slot frees. RT_QUEUED already holds the single
+                               delivery reference, so the entry stays valid. */
+                            mpsc_push(&w->inbox, n);
+                            signal_activity(rt);
+                        } else if (had_older) {
+                            signal_activity(rt);
+                        }
                     }
                 }
             } else {

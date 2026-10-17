@@ -21,7 +21,9 @@
  * the top/bottom pair alone: a slot that was consumed is simply out of range
  * and a later push overwrites it. Clearing it would race with a concurrent
  * thief that already read the top index but not yet the slot, making the thief
- * observe NULL and drop a node that was actually still in the deque.
+ * observe NULL and drop a node that was actually still in the deque. A push
+ * only ever overwrites such an out-of-range slot: wsdeque_push refuses a full
+ * ring (bottom - top >= WSDEQUE_CAPACITY) so a live slot is never clobbered.
  */
 #include "scheduler/wsdeque.h"
 
@@ -35,12 +37,28 @@ void wsdeque_init(wsdeque* d) {
     (void)memset(d->cells, 0, sizeof d->cells);
 }
 
-void wsdeque_push(wsdeque* d, rt_node* n) {
+int wsdeque_push(wsdeque* d, rt_node* n) {
     uint64_t b = coro_at_load_relaxed((const volatile uint64_t*)&d->bottom);
+    uint64_t t = coro_at_load((volatile uint64_t*)&d->top);
+    /* Refuse before touching a cell. The owner is the only writer of bottom,
+       so a snapshot check that passes cannot be invalidated by another push,
+       and a stealer only moves top up (shrinking the fill); a stale top can
+       therefore only over-report "full", which merely defers the node. This
+       is what keeps bottom - top <= WSDEQUE_CAPACITY and guarantees the cell
+       at b & WSDEQUE_MASK is not a live slot: aliasing a live index i in
+       [top, b) would force b - i >= WSDEQUE_CAPACITY, contradiction. */
+    if (b - t >= WSDEQUE_CAPACITY) return 0;
     d->cells[b & WSDEQUE_MASK] = n;
     /* Publish the node before advancing bottom: a thief that sees the new
        bottom must be able to read the cell it points at. */
     coro_at_store((volatile uint64_t*)&d->bottom, b + 1);
+    return 1;
+}
+
+int wsdeque_full(const wsdeque* d) {
+    uint64_t b = coro_at_load_relaxed((const volatile uint64_t*)&d->bottom);
+    uint64_t t = coro_at_load((volatile uint64_t*)&d->top);
+    return b - t >= WSDEQUE_CAPACITY;
 }
 
 rt_node* wsdeque_pop(wsdeque* d) {
