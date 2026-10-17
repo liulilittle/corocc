@@ -1346,15 +1346,49 @@ static void c2_sv_dump(void) {
        frozen dump whose wake_claimed lags park (with wakes refused/absorbed)
        names the missing handoff. Does NOT relax any gate. */
     fprintf(stderr, "[watchdog] SV dbg park=%llu claimed=%llu absorbed=%llu "
-                    "refused=%llu pop_discard=%llu retire_spin=%llu\n",
+                    "refused=%llu pop_discard=%llu retire_spin=%llu "
+                    "cas_retry=%llu\n",
             (unsigned long long)rt_dbg.park,
             (unsigned long long)rt_dbg.wake_claimed,
             (unsigned long long)rt_dbg.wake_absorbed,
             (unsigned long long)rt_dbg.wake_refused,
             (unsigned long long)rt_dbg.pop_discard,
-            (unsigned long long)rt_dbg.retire_spin);
+            (unsigned long long)rt_dbg.retire_spin,
+            (unsigned long long)rt_dbg.cas_retry);
+#endif
+#ifdef COROCC_WAKE_DBG
+    {
+        unsigned i;
+        for (i = 0; i < C2_SV_VICTIMS; ++i) {
+            const rt_node* n = (const rt_node*)c2_sv_node[i];
+            if (!n) { fprintf(stderr, "[watchdog] SV victim#%u node=NULL\n", i); continue; }
+            {
+                uint64_t f = c2_at_load_u64((volatile uint64_t*)&n->flags);
+                unsigned wi = 9999u;
+                int onq = 0;
+                const rt_node* p = (const rt_node*)c2_sv_m.waitq;
+                if (n->worker && c2_rt)
+                    wi = (unsigned)(n->worker - c2_rt->workers);
+                while (p) { if (p == n) { onq = 1; break; } p = p->waiter_next; }
+                fprintf(stderr,
+                        "[watchdog] SV victim#%u node=%p worker=%u onwaitq=%d "
+                        "flags=0x%llx%s%s%s%s%s%s%s\n",
+                        i, (const void*)n, wi, onq, (unsigned long long)f,
+                        (f & RT_STARTED) ? " STARTED" : "",
+                        (f & RT_WAITING) ? " WAITING" : "",
+                        (f & RT_PARKED) ? " PARKED" : "",
+                        (f & RT_QUEUED) ? " QUEUED" : "",
+                        (f & RT_WAKE_PENDING) ? " PENDING" : "",
+                        (f & RT_DYING) ? " DYING" : "",
+                        (f & RT_DONE) ? " DONE" : "");
+            }
+        }
+    }
 #endif
     if (c2_sv_gate_mode) c2_sv_walk_guarded();
+#ifdef COROCC_WAKE_DBG
+    if (!c2_sv_gate_mode) c2_sv_walk_guarded();
+#endif
 }
 
 /* handoff=0: strict gate (old bt_p8 shape, stamping criterion).

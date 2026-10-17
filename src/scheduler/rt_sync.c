@@ -36,9 +36,10 @@
 #include <stdlib.h>   /* calloc / free / realloc: the channel ring buffer */
 
 #ifdef COROCC_WAKE_DBG
-#define RT_DBG_INC(f) (++rt_dbg.f)
+#define RT_DBG_INC(f, v) \
+    (void)coro_at_fetch_add((volatile uint64_t*)&rt_dbg.f, (uint64_t)(v))
 #else
-#define RT_DBG_INC(f) ((void)0)
+#define RT_DBG_INC(f, v) ((void)0)
 #endif
 
 /* ---- local helpers ---------------------------------------------------- */
@@ -116,8 +117,8 @@ static rt_node* q_pop(void** q) {
 static rt_node* q_pop_wakeable(void** q) {
     rt_node* w;
     while ((w = q_pop(q)) != NULL) {
-        if (node_test(w, RT_DONE | RT_DYING)) { RT_DBG_INC(pop_discard); continue; }
-        if (!node_test(w, RT_WAITING)) { RT_DBG_INC(pop_discard); continue; }
+        if (node_test(w, RT_DONE | RT_DYING)) { RT_DBG_INC(pop_discard, 1); continue; }
+        if (!node_test(w, RT_WAITING)) { RT_DBG_INC(pop_discard, 1); continue; }
         break;
     }
     return w;
@@ -137,7 +138,7 @@ static void rt_chain_park(void** chain, rt_node* self) {
     q_append(chain, self);
     node_set(self, RT_WAITING);
     node_set(self, RT_PARKED);
-    RT_DBG_INC(park);
+    RT_DBG_INC(park, 1);
     /* BT minimal handshake: a collapsed wake left a drive owed to this
        flow; the park publication is its deliverer (re-armed into the
        owner's inbox; the possible spurious wake is re-checked by the
@@ -197,6 +198,7 @@ coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m) {
     for (;;) {
         uint64_t cur = 0;
         if (coro_at_cas(&m->locked, &cur, 1)) return CORO_OK;
+        RT_DBG_INC(cas_retry, 1);
 
         /* Slow path: enqueue FIRST, then retry the take inside the same
            activity-lock section. The unlock fast path (release exchange,
@@ -225,7 +227,7 @@ coro_status coro_rt_mutex_lock(coro_rt_t* rt, coro_rt_mutex_t* m) {
         }
         node_set(self, RT_WAITING);
         node_set(self, RT_PARKED);
-        RT_DBG_INC(park);
+        RT_DBG_INC(park, 1);
         (void)rt_pending_requeue(self);   /* round-6: park consumes pending */
         coro_plat_mutex_unlock(&rt->act_lock);
         /* Round-7 handshake: an unlock's fast path can miss this freshly

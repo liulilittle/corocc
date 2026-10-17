@@ -143,6 +143,7 @@ struct rt_wake_dbg {
     volatile uint64_t wake_refused;  /* corpse (DONE/DYING) or not RT_WAITING     */
     volatile uint64_t pop_discard;   /* q_pop_wakeable popped a non-wakeable head */
     volatile uint64_t retire_spin;   /* retire_node RT_QUEUED spin turns          */
+    volatile uint64_t cas_retry;     /* mutex lock fast-path CAS lost (contended) */
 };
 extern struct rt_wake_dbg rt_dbg;
 #endif
