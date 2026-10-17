@@ -21,6 +21,7 @@
  * deadlock.
  */
 #include "scheduler/rt.h"
+#include "scheduler/rt_driver.h"
 
 #include "coroutine/coro_internal.h"
 
@@ -140,8 +141,17 @@ static void live_notify(coro_rt_t* rt) {
 }
 
 /* Wake every idle worker: bump the generation under the activity lock and
-   broadcast, so a producer that raises work always wakes the sleepers. */
+   broadcast, so a producer that raises work always wakes the sleepers. When a
+   driver is attached its doorbell replaces the broadcast entirely; the driver
+   contract (no synchronous call back into the runtime) is what makes this a
+   drop-in for the act_lock path below. */
 static void signal_activity(coro_rt_t* rt) {
+#if COROCC_RT_DRIVER
+    if (rt->drv) {
+        rt->drv->ops.wake(rt->drv->ctx);
+        return;
+    }
+#endif
     coro_plat_mutex_lock(&rt->act_lock);
     ++rt->act_gen;
     coro_plat_cond_broadcast(&rt->act_cond);
@@ -257,7 +267,7 @@ static void collect_expired(rt_worker* w) {
        syscall on Linux) just to learn that. The heap is worker-private, so the
        count load needs no synchronization. */
     if (w->sleepers.count == 0) return;
-    uint64_t now = coro_monotonic_ns();
+    uint64_t now = rt_now(w->rt);
     for (;;) {
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
         if (!t || t->deadline > now) return;
@@ -741,7 +751,7 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
         }
         /* BT genuineness: a stale delivery can resume the sleep early; only
            a passed deadline makes the sleep complete. */
-        if (coro_monotonic_ns() >= deadline) {
+        if (rt_now(rt) >= deadline) {
             node_clear(n, RT_WAITING);
             node_clear(n, RT_PARKED);
             return CORO_OK;

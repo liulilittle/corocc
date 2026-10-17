@@ -33,6 +33,7 @@
 #include <stddef.h>
 
 #include <corocc/coro_rt.h>
+#include <corocc/coro_rt_driver.h>
 #include <corocc/coro.h>
 #include <corocc/coro_stack.h>
 
@@ -144,6 +145,9 @@ struct coro_rt {
     coro_plat_mutex_t cache_lock; /**< guards the stack reclaim pool below. */
     coro_stack      cache[COROCC_RT_STACK_CACHE_MAX]; /**< parked stacks. */
     size_t          cache_n;      /**< parked entries in use. */
+    coro_rt_driver_t* drv;        /**< attached driver, or NULL for the built-in
+                                       EDSM backend (B1 leaves it NULL: the
+                                       attach/detach machine lands in B2). */
 };
 
 #endif /* COROCC_SCHEDULER_RT_H */

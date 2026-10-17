@@ -260,6 +260,14 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     add_test(NAME rt_scope_thread COMMAND test_rt_scope_thread)
     set_tests_properties(rt_scope_thread PROPERTIES TIMEOUT 120)
 
+    # B1: the process-level runtime-driver registry (pure C, portable across
+    # every site -- the concurrency leg uses tests/palt_threads.h). The vtable
+    # and hot-plug suites follow in B2.
+    add_executable(test_rt_driver_registry unit/test_rt_driver_registry.c)
+    target_include_directories(test_rt_driver_registry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_driver_registry PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_driver_registry COMMAND test_rt_driver_registry)
+
 # Custom allocator interface.
 add_executable(test_coro_allocator unit/test_coro_allocator.c)
 target_link_libraries(test_coro_allocator PRIVATE corocc)

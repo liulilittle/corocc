@@ -118,11 +118,11 @@ case "$ROW_EXCL" in "("*) ROW_EXCL="" ;; esac   # annotation, not a filter
 
 case "$MATRIX_ENV" in
     "") ;;
-    cross)   [ -n "$EXP_REG" ] || EXP_REG="34|44"; [ -n "$EXP_EXE" ] || EXP_EXE="34|43" ;;
-    native)  [ -n "$EXP_REG" ] || EXP_REG="44|45"; [ -n "$EXP_EXE" ] || EXP_EXE="43|44" ;;
-    nospin)  [ -n "$EXP_REG" ] || EXP_REG="45|46"; [ -n "$EXP_EXE" ] || EXP_EXE="44|45" ;;
-    asan)    [ -n "$EXP_REG" ] || EXP_REG="43|44"; [ -n "$EXP_EXE" ] || EXP_EXE="40|41" ;;
-    windows) [ -n "$EXP_REG" ] || EXP_REG="42";    [ -n "$EXP_EXE" ] || EXP_EXE="42" ;;
+    cross)   [ -n "$EXP_REG" ] || EXP_REG="35|45"; [ -n "$EXP_EXE" ] || EXP_EXE="35|44" ;;
+    native)  [ -n "$EXP_REG" ] || EXP_REG="45|46"; [ -n "$EXP_EXE" ] || EXP_EXE="44|45" ;;
+    nospin)  [ -n "$EXP_REG" ] || EXP_REG="46|47"; [ -n "$EXP_EXE" ] || EXP_EXE="45|46" ;;
+    asan)    [ -n "$EXP_REG" ] || EXP_REG="44|45"; [ -n "$EXP_EXE" ] || EXP_EXE="41|42" ;;
+    windows) [ -n "$EXP_REG" ] || EXP_REG="43";    [ -n "$EXP_EXE" ] || EXP_EXE="43" ;;
     tsan)    [ -n "$EXP_REG" ] || EXP_REG="1";     [ -n "$EXP_EXE" ] || EXP_EXE="1"
              [ "$INCLUDE_SET" -eq 1 ] || INCLUDE="tsan" ;;
     *) echo "build-test.sh: unknown --matrix-env '$MATRIX_ENV'" >&2; exit 2 ;;

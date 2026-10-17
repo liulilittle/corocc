@@ -6,6 +6,11 @@ option(COROCC_ASAN "Build with AddressSanitizer (fiber-switch hooks)" OFF)
 option(COROCC_TSAN "Build with ThreadSanitizer (data races in the runtime)" OFF)
 option(COROCC_PROBE_NOSPIN "Count compare-and-swap attempts so the zero-spin
 contract can be asserted" OFF)
+# Runtime driver dispatch layer (design v1 B1). OFF compiles the driver dispatch
+# branches out entirely -- rt_now reduces to coro_monotonic_ns and the doorbell
+# to its original broadcast -- for embedded builds that never attach a driver.
+# The registry itself stays available either way.
+option(COROCC_RT_DRIVER "Compile the runtime driver dispatch layer" ON)
 # Link-time code generation (MSVC /GL + /LTCG) for Release builds. The
 # performance gate was measured with it, and the gate configuration must be
 # the delivery configuration: a Release build that ships without it is
@@ -51,6 +56,10 @@ if (COROCC_PROBE_NOSPIN)
     add_compile_definitions(COROCC_PROBE_NOSPIN=1)
 endif()
 
+if (NOT COROCC_RT_DRIVER)
+    add_compile_definitions(COROCC_RT_DRIVER=0)
+endif()
+
 if (MSVC AND COROCC_LTCG)
     # Per-config: Debug keeps plain /Od, Release gets /GL + /LTCG. The
     # variable drives the INTERPROCEDURAL_OPTIMIZATION_RELEASE property for
@@ -67,6 +76,7 @@ add_library(corocc STATIC
     src/scheduler/timer.c
     src/scheduler/sched.c
     src/scheduler/rt.c
+    src/scheduler/rt_driver.c
     src/scheduler/rt_sync.c
     src/scheduler/rt_scope.c
     src/scheduler/wsdeque.c
