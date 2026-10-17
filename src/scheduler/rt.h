@@ -161,14 +161,13 @@ struct coro_rt {
     /* B2 driver state. drv_kind is RT_DRV_*; drv_lock serializes attach/detach
        against a worker arming its own alarm, and guards the workers' alarm_*
        fields. drv_gen is bumped on every switch (an alarm armed under an older
-       generation is stale). drv_barrier freezes workers at the top of their
-       loop while a switch migrates alarms; drv_parked counts the workers parked
-       on it. pump_active is a re-entrancy guard for coro_rt_pump. */
+       generation is stale, so the worker re-arms on the new one). A same-family
+       switch migrates alarms in place and never parks a worker; the cross-class
+       worker-quiesce barrier returns with B4. pump_active is a re-entrancy guard
+       for coro_rt_pump. */
     coro_plat_mutex_t drv_lock;
     unsigned          drv_kind;
     uint64_t          drv_gen;
-    uint64_t          drv_barrier;   /**< atomic: 1 = workers hold at the barrier. */
-    uint64_t          drv_parked;    /**< atomic: workers currently parked. */
     uint64_t          pump_active;   /**< atomic: a pump is inside rt_run_some. */
 };
 

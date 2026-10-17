@@ -517,23 +517,6 @@ static void worker_main(void* pv) {
     for (;;) {
         if (coro_at_load((volatile uint64_t*)&w->stop)) break;
 
-        /* A driver switch parks every worker here while it migrates alarms.
-           The worker stays off the run queue and out of the timer heap until
-           the switch clears the barrier. */
-        if (coro_at_load((volatile uint64_t*)&rt->drv_barrier)) {
-            coro_plat_mutex_lock(&rt->act_lock);
-            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked, 1);
-            coro_plat_cond_broadcast(&rt->act_cond);
-            while (coro_at_load((volatile uint64_t*)&rt->drv_barrier) &&
-                   !coro_at_load((volatile uint64_t*)&w->stop)) {
-                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
-            }
-            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked,
-                                    (uint64_t)-1);
-            coro_plat_mutex_unlock(&rt->act_lock);
-            continue;
-        }
-
         /* One node per turn keeps the hot path's shape; the budget form is for
            the host-driven pump. */
         if (rt_run_some(rt, w, 1) > 0) continue;

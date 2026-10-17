@@ -67,7 +67,7 @@ static void test_attach_running(void) {
     CHECK_EQ(coro_at_load(&g_completed), 8);
 
     CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK);
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
     coro_rt_wait_all(rt);
     CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
     CHECK_EQ(coro_rt_driver_unregister(d), CORO_OK);
@@ -186,7 +186,7 @@ static void test_loop_attach_ebusy(void) {
     /* Idle runtime: still refused, because its worker threads cannot be
        repurposed in v1. */
     CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_EBUSY);
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
 
     /* And while a coroutine is actively sleeping (a worker is driving). */
     coro_at_store((volatile uint64_t*)&g_completed, 0);
@@ -210,17 +210,44 @@ static void test_attached_query(void) {
     coro_rt_driver_t* d = fake_start("hotplug-query", &f, 0);
     CHECK(d != NULL);
 
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
     CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK);
     CHECK(coro_rt_attached_driver(rt) == d);
     CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK); /* idempotent same driver */
     CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK);
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
     CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK); /* idempotent */
     CHECK_EQ(coro_rt_attach_driver(NULL, d), CORO_EINVAL);
 
     coro_rt_wait_all(rt);
     CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(d), CORO_OK);
+    fake_stop(&f);
+}
+
+/* ---- attach immediately after create, before any worker parks ---- */
+
+static void test_attach_right_after_create(void) {
+    fake_driver f;
+    coro_rt_driver_t* d = fake_start("hotplug-fresh", &f, 0);
+    CHECK(d != NULL);
+
+    /* No spawn and no sleep: the workers have not parked anywhere. attach must
+       succeed at once. A same-family switch re-arms alarms in place and leans
+       on each worker's generation self-heal, so it never waits for a worker to
+       reach a barrier -- that wall-clock wait is exactly what timed out on an
+       emulated host and turned this attach into CORO_EBUSY. */
+    for (int i = 0; i < 50; ++i) {
+        coro_rt_t* rt = coro_rt_create(2);
+        CHECK(rt != NULL);
+        CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK);
+        CHECK(coro_rt_attached_driver(rt) == d);
+        CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK);
+        CHECK(coro_rt_attached_driver(rt) == NULL);
+        coro_rt_wait_all(rt);
+        CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+    }
+
     CHECK_EQ(coro_rt_driver_unregister(d), CORO_OK);
     fake_stop(&f);
 }
@@ -279,6 +306,7 @@ static void run_tests(void) {
     test_cancel_after_attach();
     test_loop_attach_ebusy();
     test_attached_query();
+    test_attach_right_after_create();
     test_pump_loop();
     test_pump_signal_ebusy();
 }

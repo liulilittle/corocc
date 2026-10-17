@@ -48,7 +48,7 @@ static void test_signal_vtable(void) {
     coro_rt_t* rt = coro_rt_create(2);
     CHECK(rt != NULL);
 
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
     CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK);
     CHECK(coro_rt_attached_driver(rt) == d);
 
@@ -68,7 +68,7 @@ static void test_signal_vtable(void) {
 
     coro_rt_wait_all(rt);
     CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK);
-    CHECK_EQ(coro_rt_attached_driver(rt), NULL);
+    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
     CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
     CHECK_EQ(coro_rt_driver_unregister(d), CORO_OK);
     fake_stop(&f);

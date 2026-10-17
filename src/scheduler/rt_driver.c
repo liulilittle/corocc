@@ -179,24 +179,6 @@ int rt_driver_registered(const coro_rt_driver_t* drv) {
     return found;
 }
 
-/* Wait until every worker is parked at the barrier, or ~500 ms elapse. The
-   caller has already set drv_barrier (and must clear it). Every worker
-   broadcasts the activity condition as it parks, so this waits on that. */
-static int rt_quiesce_wait(coro_rt_t* rt) {
-    rt_signal_activity(rt); /* prod every worker toward the barrier */
-    coro_plat_mutex_lock(&rt->act_lock);
-    uint64_t deadline = coro_monotonic_ns() + 500000000ull; /* 500 ms */
-    while (coro_at_load((volatile uint64_t*)&rt->drv_parked) < rt->nworkers) {
-        if (coro_plat_cond_timedwait_ns(&rt->act_cond, &rt->act_lock,
-                                        deadline) != 0) {
-            break;
-        }
-    }
-    int ok = coro_at_load((volatile uint64_t*)&rt->drv_parked) >= rt->nworkers;
-    coro_plat_mutex_unlock(&rt->act_lock);
-    return ok;
-}
-
 /* Migrate one worker's outstanding alarm from old to new (drv_lock held). Only
    the worker's own alarm token is touched -- never an rt_node. */
 static void rt_driver_rearm_locked(coro_rt_t* rt, rt_worker* w,
@@ -217,7 +199,27 @@ static void rt_driver_rearm_locked(coro_rt_t* rt, rt_worker* w,
     }
 }
 
-/* The common switch path; drv == NULL means the built-in backend. */
+/* The common switch path; drv == NULL means the built-in backend.
+ *
+ * A same-family switch (BUILTIN <-> SIGNAL <-> SIGNAL) is O(1) and never parks
+ * a worker: under drv_lock it withdraws each worker's outstanding alarm from
+ * the old driver and re-arms it, at the same stored deadline, on the new one,
+ * then publishes the new driver and bumps drv_gen. Serializing on drv_lock is
+ * what makes that safe against a worker arming or cancelling its own alarm in
+ * worker_sleep (which takes the same lock); the generation bump is the worker's
+ * self-heal -- worker_sleep re-evaluates whenever drv_gen changed since it read
+ * it, so a worker mid-sleep abandons the old mechanism and re-arms on the new
+ * driver at its next pass.
+ *
+ * The migration withdraws the old alarm before dropping it (never leaves one
+ * outstanding), so the old driver cannot fire a stale callback after the
+ * switch -- the invariant the N2 probe pins down. With no barrier to wait on,
+ * attach has no wall-clock dependence and succeeds immediately on a fresh
+ * runtime whose workers have not parked yet.
+ *
+ * A cross-family switch (LOOP vs. non-LOOP) is refused with CORO_EBUSY in v1:
+ * LOOP changes who runs the worker loop, so a live switch needs the worker
+ * quiesce barrier that runtime cross-class switching (B4) will bring back. */
 static coro_status rt_driver_switch(coro_rt_t* rt, coro_rt_driver_t* drv,
                                     unsigned nk) {
     coro_plat_mutex_lock(&rt->drv_lock);
@@ -234,35 +236,16 @@ static coro_status rt_driver_switch(coro_rt_t* rt, coro_rt_driver_t* drv,
         coro_plat_mutex_unlock(&rt->drv_lock);
         return CORO_EBUSY;
     }
-    coro_rt_driver_t* old = cur;
-    int have_threads = (ck != RT_DRV_LOOP);
-    if (have_threads) {
-        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 1);
-    }
-    coro_plat_mutex_unlock(&rt->drv_lock);
-
-    if (have_threads && !rt_quiesce_wait(rt)) {
-        coro_plat_mutex_lock(&rt->drv_lock);
-        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 0);
-        coro_plat_mutex_unlock(&rt->drv_lock);
-        rt_signal_activity(rt);
-        return CORO_EBUSY;
-    }
-
-    coro_plat_mutex_lock(&rt->drv_lock);
     uint64_t new_gen = rt->drv_gen + 1;
     for (size_t i = 0; i < rt->nworkers; ++i) {
-        rt_driver_rearm_locked(rt, &rt->workers[i], old, drv, new_gen);
+        rt_driver_rearm_locked(rt, &rt->workers[i], cur, drv, new_gen);
     }
     rt->drv_kind = nk;
     coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)drv);
-    (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_gen, 1);
-    if (have_threads) {
-        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 0);
-    }
+    coro_at_store((volatile uint64_t*)&rt->drv_gen, new_gen);
     coro_plat_mutex_unlock(&rt->drv_lock);
 
-    rt_signal_activity(rt); /* release the parked workers / raise the doorbell */
+    rt_signal_activity(rt); /* release any parked workers / raise the doorbell */
     return CORO_OK;
 }
 

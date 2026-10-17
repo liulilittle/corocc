@@ -208,7 +208,7 @@ COROCC_API coro_rt_driver_t* coro_rt_driver_default(void);
  *
  * @return CORO_OK on success (including a same-driver no-op); CORO_EINVAL for a
  *         NULL runtime or a driver the registry does not own; CORO_EBUSY for a
- *         cross-family switch or when the runtime cannot be quiesced in time.
+ *         cross-family (LOOP vs. worker-mode) switch.
  */
 COROCC_API coro_status coro_rt_attach_driver(coro_rt_t* rt,
                                              coro_rt_driver_t* drv);
