@@ -391,22 +391,22 @@ std::size_t n = corocc::asio::async_read(rt.native(), sock,
 
 ## 已知限制
 
-- **I/O:**核心库没有异步 I/O 完成循环;协程可停放于定时器与同步原语,但不能
+- **I/O:** 核心库没有异步 I/O 完成循环;协程可停放于定时器与同步原语,但不能
   停放于文件/套接字就绪事件。桥接到事件循环的受支持方式是可选 Boost.Asio
   集成([docs/api/boost.zh-CN.md](docs/api/boost.zh-CN.md))。
 - **手动层 join:**`coro_join` 不阻塞——协程存活期间报告 `CORO_EAGAIN`,由
   调用方驱动其结束。阻塞式 join 位于运行时层(`coro_rt_join`)。
-- **线程:**单个 `coro_ctx` 切换对本身不是线程安全的:同一时刻只能由一条
+- **线程:** 单个 `coro_ctx` 切换对本身不是线程安全的:同一时刻只能由一条
   线程切换。L1 的认领机制保证了整个协程层面的这一约束(见
   [docs/api/coro.zh-CN.md](docs/api/coro.zh-CN.md) 与
   [docs/threading.zh-CN.md](docs/threading.zh-CN.md))。
-- **异常:**禁止用 `coro_ctx_swap` 跨上下文边界传播 C++ 异常。
-- **s390x 协程内 TLS:**s390x 上协程体内不要依赖 `thread_local`(TLS)变量
+- **异常:** 禁止用 `coro_ctx_swap` 跨上下文边界传播 C++ 异常。
+- **s390x 协程内 TLS:** s390x 上协程体内不要依赖 `thread_local`(TLS)变量
   —— gcc 将线程指针缓存在被保存寄存器中,而上下文切换会跨线程恢复该寄存器,
   切换后缓存值可能失效。s390x 的 toolchain 文件因此使用
   `-fno-stack-protector`。其他 ABI 不受影响;一般 `thread_local` 契约见
   [docs/threading.zh-CN.md](docs/threading.zh-CN.md)。
-- **交叉构建测试:**Boost 共存测试仅在本机构建中注册(交叉构建会把宿主机的
+- **交叉构建测试:** Boost 共存测试仅在本机构建中注册(交叉构建会把宿主机的
   Boost 目标文件链入异构架构二进制)。
 
 ## 许可证
