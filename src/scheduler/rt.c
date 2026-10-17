@@ -444,7 +444,24 @@ size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
                            too (a pending stale entry already owes the drive). */
                         node_clear(n, RT_PARKED);
                     } else if (rt_queue_claim(n)) {
+                        /* Self-requeue of a plain yield. n lands on this
+                           worker's owner (bottom) end, so the next pop takes n
+                           straight back; any OLDER entry already in the deque
+                           sits at the far (steal) end and can only be reached
+                           by a PEER. If every peer is asleep that older entry
+                           starves forever -- observed as a woken waiter whose
+                           delivery entry is never consumed, so its park is
+                           never fulfilled and live never reaches zero (the
+                           SV wind-down STALL: the holder re-yields while a
+                           victim's wake entry waits below). Raise the activity
+                           signal when the deque was ALREADY non-empty, exactly
+                           as drain_inbox does after routing, so an idle peer
+                           steals the older entry. An empty deque takes no
+                           signal: the common single-coroutine yield stays free
+                           of any lock/broadcast. */
+                        int had_older = !wsdeque_empty(&w->queue);
                         wsdeque_push(&w->queue, n);
+                        if (had_older) signal_activity(rt);
                     }
                 }
             } else {
