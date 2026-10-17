@@ -544,6 +544,31 @@ static void worker_sleep(coro_rt_t* rt, rt_worker* w, uint64_t deadline) {
     coro_plat_mutex_unlock(&rt->act_lock);
 }
 
+/* Park a worker on the cross-class barrier. Kept in its own noinline function
+   on purpose: inlined into worker_main, this body (mutex/cond calls) perturbed
+   clang -O3's register allocation in the per-node hot loop and measurably
+   slowed it -- under CPU oversubscription that pushed rt_cancel_park's SV case
+   over its watchdog. The barrier test in the loop stays a plain atomic load. */
+#if defined(_MSC_VER)
+# define COROCC_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+# define COROCC_NOINLINE __attribute__((noinline))
+#else
+# define COROCC_NOINLINE
+#endif
+static COROCC_NOINLINE void worker_barrier_park(coro_rt_t* rt, rt_worker* w) {
+    coro_plat_mutex_lock(&rt->act_lock);
+    (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked, 1);
+    coro_plat_cond_broadcast(&rt->act_cond);
+    while (coro_at_load((volatile uint64_t*)&rt->drv_barrier) &&
+           !coro_at_load((volatile uint64_t*)&w->stop)) {
+        (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
+    }
+    (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked,
+                            (uint64_t)-1);
+    coro_plat_mutex_unlock(&rt->act_lock);
+}
+
 static void worker_main(void* pv) {
     rt_worker* w = (rt_worker*)pv;
     coro_rt_t* rt = w->rt;
@@ -565,16 +590,7 @@ static void worker_main(void* pv) {
            the switch clears the barrier; in LOOP it stays parked for as long as
            the host pumps worker[0] by hand. */
         if (coro_at_load((volatile uint64_t*)&rt->drv_barrier)) {
-            coro_plat_mutex_lock(&rt->act_lock);
-            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked, 1);
-            coro_plat_cond_broadcast(&rt->act_cond);
-            while (coro_at_load((volatile uint64_t*)&rt->drv_barrier) &&
-                   !coro_at_load((volatile uint64_t*)&w->stop)) {
-                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
-            }
-            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked,
-                                    (uint64_t)-1);
-            coro_plat_mutex_unlock(&rt->act_lock);
+            worker_barrier_park(rt, w);
             continue;
         }
 
