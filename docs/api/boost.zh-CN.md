@@ -104,6 +104,39 @@ int main() {
 `rt(2)` 只是两枚 worker 线程;它不限制可创建的协程数量——协程按需增长,
 仅受内存约束,worker 只负责驱动。
 
+## 集成示例:host-loop 模式(examples/backends/asio-host)
+
+本头文件的"无运行时"对应物以**独立示例**形式发布,不属于库本体:
+`examples/backends/asio-host/`——不安装、不进库默认 CMake target。那里协程
+直接由 Boost.Asio 的 `io_context` 与 strand 驱动:没有 corocc 运行时,没有
+worker 线程:
+
+    spawn -> 协程入口在 io 线程开始 -> coro_yield 把 io 线程交还 run()
+    -> 完成处理器内联恢复协程(coro_resume)-> 栈在协程之外回收
+
+- `corocc::asio_host::spawn(executor 或 strand, fn)`(detached 语义,返回
+  `coro_status`);ec-first 的 `async_read` / `async_read_some` /
+  `async_write` / `async_write_some` 以协程的 `yield_context` 为第一参数;
+  `await_*` 桥让普通 OS 线程以阻塞形态等待同一批操作。
+- 每个完成都同时绑定协程 strand 的普通 executor 关联与 immediate executor
+  关联,因此内联恢复绝不可能与协程帧竞争,io 线程也永不阻塞。
+- 协程上下文中发起的每一次 asio 调用都经过一个不透明调用栅栏(优化器无法
+  内联穿透的间接调用),因此协程在线程间迁移时,asio 的线程局部状态不可能
+  被跨挂起点缓存;集成自己的处理器还显式携带堆分配器,而不使用 asio 的
+  线程级回收缓存。`tests/host_migration.cpp` 就是针对"内联 asio 机制在
+  clang >= -O1 下曾导致堆损坏"的回归测试。
+- 构建与运行:
+
+  ```sh
+  cmake -S examples/backends/asio-host -B build-asio-host -DCMAKE_BUILD_TYPE=Release
+  cmake --build build-asio-host
+  ctest --test-dir build-asio-host --output-on-failure
+  ```
+
+  契约、strand 继承规则、平台说明与测试清单见
+  `examples/backends/asio-host/README.md`。示例完全独立,对本头文件与库本体
+  的用户没有任何影响。
+
 ## 构建说明
 
 - header-only:把 corocc 的 `include/` 加入包含路径(或链接库以取得头中调用的

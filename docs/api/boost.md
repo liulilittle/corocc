@@ -126,6 +126,46 @@ int main() {
 can spawn. Coroutines are created on demand and their number is unbounded
 (bounded only by memory) — the workers merely drive them.
 
+## Integration example: host-loop mode (examples/backends/asio-host)
+
+The runtime-free counterpart of this header ships as a **stand-alone
+example**, not as part of the library: `examples/backends/asio-host/`. It is
+not installed and not built by the library's default CMake targets. There the
+coroutine is driven directly by a Boost.Asio `io_context` and strand — no
+corocc runtime, no worker threads:
+
+    spawn -> coroutine entry on the io thread -> coro_yield returns the io
+    thread to run() -> the completion handler resumes the coroutine inline
+    (coro_resume) -> the stack is reclaimed outside the coroutine
+
+- `corocc::asio_host::spawn(executor-or-strand, fn)` (detached; returns a
+  `coro_status`), the ec-first `async_read` / `async_read_some` /
+  `async_write` / `async_write_some` taking the coroutine's `yield_context`
+  as their first parameter, and the `await_*` bridge that lets a plain OS
+  thread block on the same operations.
+- Every completion is bound to the coroutine's strand on both the ordinary
+  and the immediate executor association, so an inline resume can never race
+  the coroutine's frame and the io thread is never blocked.
+- Every asio call made from coroutine context goes through an opaque call
+  fence (an indirect call the optimizer cannot inline through), so asio's
+  per-thread state cannot be cached across a suspension while a coroutine
+  migrates between io threads; the integration's handlers also carry an
+  explicit heap allocator instead of asio's per-thread recycling cache.
+  `tests/host_migration.cpp` is the regression against the heap corruption
+  that inlined asio machinery used to cause under clang >= -O1.
+- Build and run:
+
+  ```sh
+  cmake -S examples/backends/asio-host -B build-asio-host -DCMAKE_BUILD_TYPE=Release
+  cmake --build build-asio-host
+  ctest --test-dir build-asio-host --output-on-failure
+  ```
+
+  See `examples/backends/asio-host/README.md` for the contracts, the strand
+  inheritance rule, platform notes and the test inventory. Because the
+  example is stand-alone, it changes nothing for users of this header or of
+  the library.
+
 ## Build notes
 
 - Header-only: add corocc's `include/` to the include path (or link the
