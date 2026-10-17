@@ -113,7 +113,7 @@ toolchain/         canonical cross-compilation toolchain file (aarch64)
 scripts/           build/test/cross/prebuild entry points (scripts/README.md)
 tests/             unit, C++ (cpp/), concurrency and performance suites
 perf/              M:N runtime and pure-switch benchmarks
-docs/              ABI, platform matrix, threading and full API references
+docs/              ABI, platform matrix, toolchain sources, threading and full API references
 ```
 
 ## Prebuilt artifacts (zero-build consumption)
@@ -405,6 +405,7 @@ The four wrappers (`async_read`, `async_read_some`, `async_write`,
 | --- | --- |
 | [docs/building.md](docs/building.md) | Build options, CMake integration, prebuilt archives, cross and Android flows, benchmarks |
 | [docs/platforms.md](docs/platforms.md) | Support matrix: OS/compiler/ISA targets, qemu sites, sanitizers, known boundaries |
+| [docs/toolchains.md](docs/toolchains.md) | Per-site toolchain sources: runner image, apt cross packages, prebuilt assets, Xcode / VS / NDK |
 | [docs/ABI.md](docs/ABI.md) | The ABI contract: stability promise, measured layout tables, visibility, versioning |
 | [docs/threading.md](docs/threading.md) | Threading model, cross-thread migration, wakeup queues, `thread_local` rules |
 | [docs/api/coro_l0.md](docs/api/coro_l0.md) | L0 reference: status codes, guarded stacks, execution contexts |

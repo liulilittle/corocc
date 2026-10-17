@@ -67,7 +67,12 @@ available locally (see [ABI.md](ABI.md) for the layout results):
 
 "Prebuilt toolchain" rows use the sha256-verified toolchain/sysroot assets
 fetched by `scripts/ci/fetch-toolchain-assets.sh` (same flow in CI and
-locally). "Local probe" means the ABI layout probe was additionally compiled
+locally). The assets are not self-contained for binutils: most
+`<triple>-{ld,ar,nm,...}` entries are absolute symlinks into the host
+cross-binutils under `/usr/bin`, and `armeb`'s `as` is a thin
+`exec /usr/bin/arm-linux-gnueabi-as -EB` wrapper, so those rows keep their apt
+binutils packages. The full per-site source table is in [toolchains.md](toolchains.md).
+"Local probe" means the ABI layout probe was additionally compiled
 and run on that toolchain during the documentation verification pass;
 "plus full suite" means the complete CTest suite also ran locally under
 `qemu-user`. For the 32-bit rows, "ILP32" means 8-byte `uint64_t` alignment

@@ -110,7 +110,7 @@ toolchain/         标准交叉编译 toolchain 文件(aarch64)
 scripts/           构建/测试/交叉/预构建入口(见 scripts/README.md)
 tests/             单元、C++(cpp/)、并发与性能套件
 perf/              M:N 运行时与纯切换基准
-docs/              ABI、平台矩阵、线程模型与全部 API 参考
+docs/              ABI、平台矩阵、工具链来源、线程模型与全部 API 参考
 ```
 
 ## 预构建产物(零构建引入)
@@ -377,6 +377,7 @@ std::size_t n = corocc::asio::async_read(rt.native(), sock,
 | --- | --- |
 | [docs/building.zh-CN.md](docs/building.zh-CN.md) | 构建选项、CMake 集成、预构建归档、交叉与 Android 流程、基准 |
 | [docs/platforms.zh-CN.md](docs/platforms.zh-CN.md) | 支持矩阵:OS/编译器/ISA 目标、qemu 站点、消毒器、已知边界 |
+| [docs/toolchains.zh-CN.md](docs/toolchains.zh-CN.md) | 全站工具链来源:runner 镜像、apt 交叉包、预编译资产、Xcode / VS / NDK |
 | [docs/ABI.zh-CN.md](docs/ABI.zh-CN.md) | ABI 契约:稳定性承诺、实测布局表、可见性、版本策略 |
 | [docs/threading.zh-CN.md](docs/threading.zh-CN.md) | 线程模型、跨线程迁移、唤醒队列、`thread_local` 规则 |
 | [docs/api/coro_l0.zh-CN.md](docs/api/coro_l0.zh-CN.md) | L0 参考:状态码、守护页栈、执行上下文 |
