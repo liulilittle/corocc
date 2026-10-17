@@ -53,6 +53,23 @@ static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
 
+/* Relaxed 64-bit load/store for a word the caller's own protocol already
+   orders (the Chase-Lev owner's bottom index: the value is published with
+   coro_at_store (release) and read by a thief with coro_at_load (acquire),
+   but the owner needs no ordering of its OWN accesses). The access is still
+   atomic -- a plain access racing another thread's atomic one is a data race
+   under the C model -- only without an acquire/release on the hot path. On
+   targets whose uint64_t alignment is 4 (i386 SysV, Android x86) this lowers
+   to the same libatomic call the ACQ/REL forms do, which is why it must live
+   inside this -Watomic-alignment silencing region too. */
+static inline uint64_t coro_at_load_relaxed(const volatile uint64_t* p) {
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+}
+
+static inline void coro_at_store_relaxed(volatile uint64_t* p, uint64_t v) {
+    __atomic_store_n(p, v, __ATOMIC_RELAXED);
+}
+
 /* Strong compare-exchange: exactly one attempt, never a retry loop. Returns
    1 and updates *expected to the observed value on failure, so the caller can
    re-read the state without spinning. */
@@ -277,6 +294,38 @@ static inline void coro_at_store(volatile uint64_t* p, uint64_t v) {
 }
 
 #endif /* _M_X64 fast path */
+
+/* Relaxed counterparts of the pair above (see the GCC/Clang note): for a word
+   the caller's protocol already orders itself. On x64 the plain volatile
+   access is exactly the relaxed form (no barrier); elsewhere the interlocked
+   load/store is used and its full-barrier semantics are stronger than relaxed,
+   which is always sound. */
+#if defined(_M_X64) && !defined(COROCC_ATOMIC_NO_FASTPATH)
+
+static inline uint64_t coro_at_load_relaxed(const volatile uint64_t* p) {
+    return *p;
+}
+
+static inline void coro_at_store_relaxed(volatile uint64_t* p, uint64_t v) {
+    *p = v;
+}
+
+#else
+
+static inline uint64_t coro_at_load_relaxed(const volatile uint64_t* p) {
+    return (uint64_t)_InterlockedCompareExchange64(
+        (volatile long long*)p, 0, 0);
+}
+
+static inline void coro_at_store_relaxed(volatile uint64_t* p, uint64_t v) {
+#if defined(_M_IX86)
+    (void)coro_msx86_exchange(p, v);
+#else
+    _InterlockedExchange64((volatile long long*)p, (long long)v);
+#endif
+}
+
+#endif /* relaxed pair */
 
 /* Zero-spin accounting (mirrors the GCC path above): every compare-and-swap
    attempt is counted when COROCC_PROBE_NOSPIN is defined, so the zero-spin
