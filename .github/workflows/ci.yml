@@ -162,6 +162,39 @@ jobs:
       - name: ctest (the example's own suite)
         run: ctest --test-dir build-asio-pump --output-on-failure --timeout 300
 
+  # The libuv integration example (examples/backends/libuv) is likewise a
+  # stand-alone CMake project: a uv_run loop drives a LOOP runtime through
+  # coro_rt_pump. Same single-platform proof shape as driver-pump-example.
+  libuv-example:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libuv1-dev ninja-build
+      - name: configure + build the example (stand-alone project)
+        run: |
+          cmake -S examples/backends/libuv -B build-libuv -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-libuv -j2
+      - name: ctest (the example's own suite)
+        run: ctest --test-dir build-libuv --output-on-failure --timeout 300
+
+  # The libevent integration example (examples/backends/libevent) is likewise a
+  # stand-alone CMake project: a libevent event_base drives a LOOP runtime
+  # through coro_rt_pump. Same single-platform proof shape as
+  # driver-pump-example.
+  libevent-example:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libevent-dev ninja-build
+      - name: configure + build the example (stand-alone project)
+        run: |
+          cmake -S examples/backends/libevent -B build-libevent -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-libevent -j2
+      - name: ctest (the example's own suite)
+        run: ctest --test-dir build-libevent --output-on-failure --timeout 300
+
   cross:
     name: cross ${{ matrix.abi }}
     runs-on: ubuntu-24.04
@@ -389,7 +422,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, asio-host-example, driver-pump-example, cross, windows-msvc, macos-x64, macos-arm64, windows-x86, windows-arm64, ndk]
+    needs: [native-gcc, native-clang, native-arm64, asan, tsan, nospin, headers, boost-asio, asio-host-example, driver-pump-example, libuv-example, libevent-example, cross, windows-msvc, macos-x64, macos-arm64, windows-x86, windows-arm64, ndk]
     # NOTE: perf-report is intentionally NOT in needs (non-required).
     runs-on: ubuntu-slim            # GA: 1 vCPU, non-privileged container, 15-min job cap (fits)
     timeout-minutes: 5
@@ -407,6 +440,8 @@ jobs:
           R_BOOST_ASIO: ${{ needs.boost-asio.result }}
           R_ASIO_HOST_EXAMPLE: ${{ needs.asio-host-example.result }}
           R_DRIVER_PUMP_EXAMPLE: ${{ needs.driver-pump-example.result }}
+          R_LIBUV_EXAMPLE: ${{ needs.libuv-example.result }}
+          R_LIBEVENT_EXAMPLE: ${{ needs.libevent-example.result }}
           R_CROSS: ${{ needs.cross.result }}
           R_WINDOWS: ${{ needs.windows-msvc.result }}
           R_MACOS_X64: ${{ needs.macos-x64.result }}
@@ -435,6 +470,8 @@ jobs:
           report boost-asio      "$R_BOOST_ASIO"
           report asio-host-example "$R_ASIO_HOST_EXAMPLE"
           report driver-pump-example "$R_DRIVER_PUMP_EXAMPLE"
+          report libuv-example   "$R_LIBUV_EXAMPLE"
+          report libevent-example "$R_LIBEVENT_EXAMPLE"
           report cross           "$R_CROSS"
           report windows-msvc    "$R_WINDOWS"
           report macos-x64       "$R_MACOS_X64"

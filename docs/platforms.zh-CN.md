@@ -119,6 +119,7 @@ ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 �
 | `windows-arm64` | Visual Studio 2026 ARM64 构建(Debug + Release)与 Release 测试套件,运行于 `windows-11-arm` runner(ARM64 主机;2026-09 起默认 VS2026 镜像)。 |
 | `macos-x64`、`macos-arm64` | macOS 原生构建(Apple clang)+ Release 全量测试套件,分别覆盖 Intel(`macos-15-intel`)与 Apple Silicon(`macos-15`)。 |
 | `ndk`(2 个任务) | Android NDK 对 `arm64-v8a` 与 `x86_64` 的编译+链接。 |
+| `libuv-example`、`libevent-example` | 独立 libuv/libevent 集成示例:配置、构建并运行各示例自带的 CTest 冒烟套件。 |
 | `ci-summary` | 汇总各任务;除显式白名单外,被跳过(skipped)的任务会使汇总失败。 |
 
 `perf-report` 在每次 push/PR 上运行(手动或定时触发也运行);report-only(非门禁),

@@ -128,6 +128,7 @@ push and pull request:
 | `windows-arm64` | Visual Studio 2026 ARM64 build (Debug + Release) and the Release test suite on the `windows-11-arm` runner (ARM64 host, VS2026 image since the 2026-09 migration). |
 | `macos-x64`, `macos-arm64` | Native macOS builds (Apple clang) and the full Release test suite on Intel (`macos-15-intel`) and Apple Silicon (`macos-15`). |
 | `ndk` (2 jobs) | Android NDK compile+link for `arm64-v8a` and `x86_64`. |
+| `libuv-example`, `libevent-example` | Stand-alone libuv/libevent integration examples: configure, build and run each example's own CTest smoke suite. |
 | `ci-summary` | Aggregates the jobs; a skipped job fails the summary unless explicitly whitelisted. |
 
 `perf-report` runs on every push and pull request (and on manual or scheduled
