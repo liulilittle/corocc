@@ -306,6 +306,14 @@ static void c2_at_store_u64(volatile uint64_t* p, uint64_t v) {
 }
 static void c2_thread_yield(void) { (void)SwitchToThread(); }
 #else
+#if defined(__clang__)
+/* GNU/i686 (SysV) gives uint64_t 4-byte alignment; clang lowers these
+   under-aligned 64-bit atomics to libatomic and flags -Watomic-alignment,
+   which -Werror makes fatal. Silence only the advisory (same operation;
+   mirrors src/arch/coro_atomic.h:32-43) -- GCC is unaffected. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Watomic-alignment"
+#endif
 static long c2_at_load(volatile long* p) {
     return __atomic_load_n(p, __ATOMIC_ACQUIRE);
 }
@@ -322,6 +330,9 @@ static void c2_at_store_u64(volatile uint64_t* p, uint64_t v) {
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
 static void c2_thread_yield(void) { (void)sched_yield(); }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 static void c2_spin_us(unsigned us) {
