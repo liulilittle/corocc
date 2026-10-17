@@ -1,0 +1,56 @@
+name: diag-stall
+
+# TEMPORARY diagnostic workflow (removed once the rt_cancel_park watchdog STALL
+# has been root-caused). Manual only: it never runs on push. Builds the wake/park
+# instrumentation (-DCOROCC_WAKE_DBG) and loops the SV case pinned to two CPUs on
+# a 2-vCPU runner to capture a frozen-state dump (progress counters + RT_* flags)
+# for the lost-wakeup investigation.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stall-repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ninja-build clang
+
+      - name: configure and build (wake instrumentation)
+        run: |
+          cmake -S . -B build-wakedbg -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS=-DCOROCC_WAKE_DBG
+          cmake --build build-wakedbg --target test_rt_cancel_park
+
+      - name: loop the SV case pinned to 2 cpus
+        run: |
+          mkdir -p ci-logs/diag
+          ran=0
+          deadline=$(( $(date +%s) + 1500 ))
+          for i in $(seq 1 200); do
+            [ "$(date +%s)" -lt "$deadline" ] || break
+            ran=$i
+            C2_CASES=sv,svh C2_SV_ROUNDS=300 timeout 60 taskset -c 0-1 \
+              build-wakedbg/tests/test_rt_cancel_park > ci-logs/diag/rc.$i.log 2>&1 || true
+            if grep -q 'watchdog] STALL' ci-logs/diag/rc.$i.log; then
+              cp ci-logs/diag/rc.$i.log ci-logs/diag/stall_$i.log
+            fi
+          done
+          {
+            echo "ran=$ran"
+            echo "stalls=$(grep -l 'watchdog] STALL' ci-logs/diag/*.log 2>/dev/null | wc -l)"
+          } | tee ci-logs/diag/summary.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stall-diag
+          path: ci-logs/diag/
+          if-no-files-found: warn

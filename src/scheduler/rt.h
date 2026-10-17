@@ -130,6 +130,23 @@ int rt_node_wake(coro_rt_t* rt, rt_node* n);
  */
 int rt_node_wake_locked(rt_node* n);
 
+#ifdef COROCC_WAKE_DBG
+/* Optional park/wake instrumentation for diagnostic builds (-DCOROCC_WAKE_DBG).
+   Invariant D1: every park is matched by exactly one delivered wake. Counting
+   both sides by named reason exposes an asymmetric or lost handoff at a frozen
+   STALL dump (a park with no matching claimed wake, or a refused/absorbed wake
+   whose node never resumed). Zero cost when the macro is undefined. */
+struct rt_wake_dbg {
+    volatile uint64_t park;          /* chain/mutex/sleep/join park publications */
+    volatile uint64_t wake_claimed;  /* rt_node_wake_locked pushed a delivery     */
+    volatile uint64_t wake_absorbed; /* collapsed into a live entry (PENDING)     */
+    volatile uint64_t wake_refused;  /* corpse (DONE/DYING) or not RT_WAITING     */
+    volatile uint64_t pop_discard;   /* q_pop_wakeable popped a non-wakeable head */
+    volatile uint64_t retire_spin;   /* retire_node RT_QUEUED spin turns          */
+};
+extern struct rt_wake_dbg rt_dbg;
+#endif
+
 /**
  * rt_signal_activity -- raise the runtime's activity signal.
  *

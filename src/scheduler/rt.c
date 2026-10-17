@@ -90,6 +90,13 @@ static void rt_cpu_relax(void) {
 #endif
 }
 
+#ifdef COROCC_WAKE_DBG
+struct rt_wake_dbg rt_dbg;
+#define RT_DBG_INC(f) (++rt_dbg.f)
+#else
+#define RT_DBG_INC(f) ((void)0)
+#endif
+
 /* Claim the node's single delivery reference (BT): at most one live inbox
    entry / deque entry exists per node at any time. A delivery that loses the
    claim is collapsed into the live one; the claim is released by the worker
@@ -187,18 +194,22 @@ int rt_node_wake_locked(rt_node* n) {
     uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
     for (;;) {
         if (cur & (RT_DONE | RT_DYING)) {
+            RT_DBG_INC(wake_refused);
             return 0;
         }
         if (!(cur & RT_WAITING)) {
+            RT_DBG_INC(wake_refused);
             return 0;
         }
         uint64_t exp = cur;
         if (coro_at_cas((volatile uint64_t*)&n->flags, &exp,
                         cur & ~(uint64_t)RT_WAITING)) {
             if (rt_queue_claim(n)) {
+                RT_DBG_INC(wake_claimed);
                 node_clear(n, RT_WAKE_PENDING);
                 mpsc_push(&n->worker->inbox, n);
             } else {
+                RT_DBG_INC(wake_absorbed);
                 node_set(n, RT_WAKE_PENDING);
             }
             return 1;
@@ -344,6 +355,7 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
        in a deque: a routed entry is consumed by the claim that drives the
        node, and this worker is the one driving it now. */
     while (node_test(n, RT_QUEUED)) {
+        RT_DBG_INC(retire_spin);
         drain_inbox(n->worker);
         if (node_test(n, RT_QUEUED)) rt_cpu_relax();
     }

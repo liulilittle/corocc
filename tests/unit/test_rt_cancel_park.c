@@ -1340,6 +1340,20 @@ static void c2_sv_dump(void) {
             c2_sv_ms_since(c2_sv_t0_ns), c2_sv_ms_since(c2_sv_stop_ns),
             c2_sv_ms_since(c2_sv_cancel_last_ns),
             c2_sv_ms_since(c2_sv_exit_last_ns));
+#ifdef COROCC_WAKE_DBG
+    /* Diagnostic only (compiled under -DCOROCC_WAKE_DBG; the default build is
+       byte-identical to before). Pairs with the wake/park invariant D1: a
+       frozen dump whose wake_claimed lags park (with wakes refused/absorbed)
+       names the missing handoff. Does NOT relax any gate. */
+    fprintf(stderr, "[watchdog] SV dbg park=%llu claimed=%llu absorbed=%llu "
+                    "refused=%llu pop_discard=%llu retire_spin=%llu\n",
+            (unsigned long long)rt_dbg.park,
+            (unsigned long long)rt_dbg.wake_claimed,
+            (unsigned long long)rt_dbg.wake_absorbed,
+            (unsigned long long)rt_dbg.wake_refused,
+            (unsigned long long)rt_dbg.pop_discard,
+            (unsigned long long)rt_dbg.retire_spin);
+#endif
     if (c2_sv_gate_mode) c2_sv_walk_guarded();
 }
 
