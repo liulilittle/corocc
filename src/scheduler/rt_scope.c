@@ -154,13 +154,15 @@ static int scope_chain_detach(coro_rt_scope_t* s, rt_node* self) {
     return found;
 }
 
-/* Wake a list detached from an event chain. Always runs with the activity
-   lock NOT held (Q1: rt_node_wake takes it to signal). */
-static void scope_wake_list(coro_rt_t* rt, rt_node* list) {
+/* Wake a list detached from an event chain (act_lock held). Waking under the
+   lock keeps each detached waiter from being resumed, retired and freed
+   between the detach and the wake (retire_node publishes RT_DYING under the
+   same lock); the caller raises the idle signal after it unlocks. */
+static void scope_wake_list_locked(rt_node* list) {
     while (list) {
         rt_node* next = list->waiter_next;
         list->waiter_next = NULL;
-        rt_node_wake(rt, list);
+        (void)rt_node_wake_locked(list);
         list = next;
     }
 }
@@ -207,8 +209,9 @@ static void scope_child_exit(struct scope_child* rec, coro_status st) {
            section performs the publish, exactly once. */
         rec->exit_pending = 1;
     }
+    scope_wake_list_locked(waiters);
     coro_plat_mutex_unlock(&rt->act_lock);
-    scope_wake_list(rt, waiters);
+    if (waiters) rt_signal_activity(rt);
 }
 
 static void scope_trampoline(void* pv) {
@@ -394,8 +397,9 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
            publish waited for this critical section. */
         rec->exit_pending = 0;
         rt_node* waiters = scope_publish_locked(s, rec);
+        scope_wake_list_locked(waiters);
         coro_plat_mutex_unlock(&rt->act_lock);
-        scope_wake_list(rt, waiters);
+        if (waiters) rt_signal_activity(rt);
         coro_plat_mutex_lock(&rt->act_lock);
     }
     if (scope_state_load(s) != SCOPE_OPEN) {
@@ -472,8 +476,9 @@ static coro_status scope_drain_locked(coro_rt_t* rt, coro_rt_scope_t* s,
         s->waitq = NULL;
     }
     coro_status agg = scope_status_load(s);
+    scope_wake_list_locked(waiters);
     coro_plat_mutex_unlock(&rt->act_lock);
-    scope_wake_list(rt, waiters);
+    if (waiters) rt_signal_activity(rt);
     if (won) scope_collect_children(rt, s);
     return agg;
 }

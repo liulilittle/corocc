@@ -119,6 +119,27 @@ struct rt_worker {
    waiter instead of letting it evaporate on the node. */
 int rt_node_wake(coro_rt_t* rt, rt_node* n);
 
+/**
+ * rt_node_wake_locked -- rt_node_wake with the activity lock already held.
+ *
+ * Same wake, but the caller already holds rt->act_lock and must call
+ * rt_signal_activity itself after releasing it. A sync release path that pops
+ * a waiter and then wakes it uses this so the popped node cannot be resumed,
+ * retired and freed between the pop and the wake (retire_node publishes
+ * RT_DYING under the same lock, so holding it keeps the node alive).
+ */
+int rt_node_wake_locked(rt_node* n);
+
+/**
+ * rt_signal_activity -- raise the runtime's activity signal.
+ *
+ * Bumps the activity generation and broadcasts so idle workers rescan, and
+ * raises the attached driver's doorbell. A locked wake (rt_node_wake_locked)
+ * leaves this to the caller, which calls it after releasing act_lock. Also
+ * declared by rt_driver.h for the driver services.
+ */
+void rt_signal_activity(coro_rt_t* rt);
+
 /* Consume a collapsed wake's pending drive at a park publication: if
    RT_WAKE_PENDING is set, clear it and re-arm the drive into the owner
    worker's inbox (the owner is the current driver, so it drains right

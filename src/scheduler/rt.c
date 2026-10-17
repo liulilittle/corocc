@@ -173,22 +173,23 @@ void rt_alarm_wake(void* arg) { signal_activity((coro_rt_t*)arg); }
    bit is the single-requeue gate against the worker that drove the node into
    the park: exactly one of the two enqueues the node, so it can never be
    queued twice and driven by two workers at once. */
-int rt_node_wake(coro_rt_t* rt, rt_node* n) {
+int rt_node_wake_locked(rt_node* n) {
     /* Consume the park WAITING atomically with a corpse check: a node that
        retired between the releaser's pop and this wake refuses the handoff
        (return 0), so the releaser serves the next waiter instead of letting
        the handoff evaporate on a corpse. On a live park the wake either
        claims the delivery (push) or collapses into the live entry and
        records RT_WAKE_PENDING, which the consuming gate discharges by
-       re-arming if that drive is spent while the flow is running. */
+       re-arming if that drive is spent while the flow is running. The caller
+       holds act_lock, so the node cannot be retired and freed underneath this
+       read (retire_node publishes RT_DYING under the same lock); the caller
+       raises the idle signal itself after releasing the lock. */
     uint64_t cur = coro_at_load((volatile uint64_t*)&n->flags);
     for (;;) {
         if (cur & (RT_DONE | RT_DYING)) {
-            signal_activity(rt);
             return 0;
         }
         if (!(cur & RT_WAITING)) {
-            signal_activity(rt);
             return 0;
         }
         uint64_t exp = cur;
@@ -200,11 +201,16 @@ int rt_node_wake(coro_rt_t* rt, rt_node* n) {
             } else {
                 node_set(n, RT_WAKE_PENDING);
             }
-            signal_activity(rt);
             return 1;
         }
         cur = exp; /* lost: exp now holds the observed value */
     }
+}
+
+int rt_node_wake(coro_rt_t* rt, rt_node* n) {
+    int woken = rt_node_wake_locked(n);
+    signal_activity(rt);
+    return woken;
 }
 
 /* ---- stack reclaim pool ---- */
@@ -310,9 +316,11 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
     /* Detach the wait chain under the activity lock, the same lock a joiner
        holds while appending to it: without it a join that linked itself
        between the check and the append could land on a chain this walk is
-       consuming, and its waiter would never be woken. The wake itself runs
-       outside the lock (rt_node_wake re-takes it to signal), the same
-       broadcast shape the sync primitives use. The retained reading belongs
+       consuming, and its waiter would never be woken. The wake then runs
+       under the lock (a locked wake; the idle signal is raised after the
+       unlock), so a detached waiter cannot be resumed by a stale delivery,
+       retired and freed between the detach and the wake. The retained reading
+       belongs
        in that same critical section, and the publication is the RELEASE
        fetch_or that follows the detach, still inside the lock: it is the
        last write to the node, so whoever observes RT_DONE -- the collector
@@ -342,11 +350,20 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
     coro_plat_mutex_lock(&rt->act_lock);
     node_set_rel(n, RT_DONE);   /* publish: retire's LAST write to n */
     coro_plat_mutex_unlock(&rt->act_lock);
-    while (waiter) {
-        rt_node* next = waiter->waiter_next;
-        waiter->waiter_next = NULL;
-        rt_node_wake(rt, waiter);
-        waiter = next;
+    /* Wake the detached join waiters under the lock: a waiter can be resumed
+       by an independent stale delivery and retire (freeing itself) between the
+       detach and a deliberate wake, so the wake must run while act_lock still
+       keeps the node alive. The idle signal is raised after the unlock. */
+    if (waiter) {
+        coro_plat_mutex_lock(&rt->act_lock);
+        while (waiter) {
+            rt_node* next = waiter->waiter_next;
+            waiter->waiter_next = NULL;
+            (void)rt_node_wake_locked(waiter);
+            waiter = next;
+        }
+        coro_plat_mutex_unlock(&rt->act_lock);
+        signal_activity(rt);
     }
     live_add(rt, -1);
     live_notify(rt);

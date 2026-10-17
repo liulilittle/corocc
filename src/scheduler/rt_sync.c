@@ -13,9 +13,11 @@
  *
  * The chains are FIFO and every chain mutation happens under the runtime's
  * activity lock, the same lock that guards the idle/settled condition and the
- * wake generation. Handing a node to its worker is done with rt_node_wake,
- * which shares the exact wake path the scheduler uses for timed and join
- * wakeups, so a notified waiter is resumed exactly once.
+ * wake generation. Handing a node to its worker is done with the locked wake
+ * (rt_node_wake_locked, issued while the activity lock is held, with the idle
+ * signal raised after the unlock), so a node popped/detached from a chain
+ * cannot be resumed by a stale delivery, retired and freed before the wake
+ * touches it; the scheduler's timed and join wakeups share the same wake core.
  *
  * Waiting protocol. A node's RT_WAITING bit doubles as its "on a chain"
  * marker: a waiter appends itself at most once, then yields; the releaser
@@ -278,32 +280,35 @@ coro_status coro_rt_mutex_unlock(coro_rt_t* rt, coro_rt_mutex_t* m) {
         return CORO_OK;
     }
 
-    coro_plat_mutex_lock(&rt->act_lock);
-    rt_node* w = q_pop_wakeable(&m->waitq);
-    coro_plat_mutex_unlock(&rt->act_lock);
-
-    /* The handoff must reach a live waiter: rt_node_wake refuses a node that
-       retired between the pop and the wake, and a cancel-bound waiter cannot
-       take the lock (its resume unwinds at the safe point), so its wake would
-       only reap it. Serve the next live waiter instead of evaporating the
-       token on it; popping unlinks, so each node is served at most once and
-       the loop is bounded by the chain length. */
-    while (w) {
-        /* Handoff-able = not cancel-bound and not already mid-exit: a waiter
-           still linked while RUNNING is inside its own cancel branch, and a
-           DEAD one is past it; neither can take the lock, so waking it would
-           evaporate the token. Only an accepted handoff ends the loop: a
-           terminal refusal (corpse) leaves the obligation with the releaser,
-           which serves the next waiter (pop unlinks, at most once per node,
-           bounded by chain length). */
-        int live = !coro_cancel_pending(w->coro) &&
-                   coro_get_state(w->coro) != CORO_RUNNING &&
-                   coro_get_state(w->coro) != CORO_DEAD;
-        if (live && rt_node_wake(rt, w)) break;   /* accepted handoff */
-        if (!live) (void)rt_node_wake(rt, w);     /* reaping drive */
+    /* The handoff must reach a live waiter: a waiter that is cancel-bound or
+       already mid-exit cannot take the lock (its resume unwinds at the safe
+       point), so waking it would only reap it. Serve the next live waiter
+       instead of evaporating the token on it; popping unlinks, so each node is
+       served at most once and the loop is bounded by the chain length.
+       Pop, classify and wake under ONE act_lock hold: a popped waiter can
+       still be resumed by an independent stale delivery and run to completion,
+       and once it retires retire_node frees it -- reading w->coro (or handing
+       w to the wake) after dropping the lock is a use-after-free (observed:
+       heap-use-after-free in this loop). retire_node publishes RT_DYING under
+       the same lock, so holding it keeps w alive for the classification and
+       the delivery; the idle signal is raised after the unlock. */
+    for (;;) {
+        rt_node* w;
+        int live;
+        int accepted;
         coro_plat_mutex_lock(&rt->act_lock);
         w = q_pop_wakeable(&m->waitq);
+        if (!w) {
+            coro_plat_mutex_unlock(&rt->act_lock);
+            break;
+        }
+        live = !coro_cancel_pending(w->coro) &&
+               coro_get_state(w->coro) != CORO_RUNNING &&
+               coro_get_state(w->coro) != CORO_DEAD;
+        accepted = rt_node_wake_locked(w);
         coro_plat_mutex_unlock(&rt->act_lock);
+        rt_signal_activity(rt);
+        if (live && accepted) break;   /* accepted handoff */
     }
     return CORO_OK;
 }
@@ -334,8 +339,9 @@ coro_status coro_rt_cond_wait(coro_rt_t* rt, coro_rt_cond_t* c,
        closure proof at coro_rt_mutex_unlock). */
     (void)coro_at_exchange(&m->locked, 0);
     rt_chain_park(&c->waitq, self);
+    if (mw) (void)rt_node_wake_locked(mw);   /* wake under the lock (no UAF) */
     coro_plat_mutex_unlock(&rt->act_lock);
-    if (mw) rt_node_wake(rt, mw);
+    if (mw) rt_signal_activity(rt);
 
     for (;;) {
         if (coro_yield() != CORO_OK) {
@@ -366,15 +372,18 @@ coro_status coro_rt_cond_wait(coro_rt_t* rt, coro_rt_cond_t* c,
 
 coro_status coro_rt_cond_notify(coro_rt_t* rt, coro_rt_cond_t* c) {
     if (!rt || !c) return CORO_EINVAL;
-    coro_plat_mutex_lock(&rt->act_lock);
-    rt_node* w = q_pop_wakeable(&c->waitq);
-    coro_plat_mutex_unlock(&rt->act_lock);
-    while (w && !rt_node_wake(rt, w)) {
+    /* Hold act_lock across pop+wake (see coro_rt_mutex_unlock's note): a node
+       popped here can otherwise be resumed by a stale delivery, retired and
+       freed before the wake touches it. */
+    for (;;) {
         coro_plat_mutex_lock(&rt->act_lock);
-        w = q_pop_wakeable(&c->waitq);
+        rt_node* w = q_pop_wakeable(&c->waitq);
+        int woken = w ? rt_node_wake_locked(w) : 0;
         coro_plat_mutex_unlock(&rt->act_lock);
+        if (!w) return CORO_OK;
+        rt_signal_activity(rt);
+        if (woken) return CORO_OK;
     }
-    return CORO_OK;
 }
 
 coro_status coro_rt_cond_broadcast(coro_rt_t* rt, coro_rt_cond_t* c) {
@@ -382,9 +391,10 @@ coro_status coro_rt_cond_broadcast(coro_rt_t* rt, coro_rt_cond_t* c) {
     for (;;) {
         coro_plat_mutex_lock(&rt->act_lock);
         rt_node* w = q_pop_wakeable(&c->waitq);
+        if (w) (void)rt_node_wake_locked(w);
         coro_plat_mutex_unlock(&rt->act_lock);
         if (!w) return CORO_OK;
-        rt_node_wake(rt, w);
+        rt_signal_activity(rt);
     }
 }
 
@@ -473,18 +483,27 @@ coro_status coro_rt_sem_post(coro_rt_t* rt, coro_rt_sem_t* s) {
         return CORO_OK;
     }
 
-    coro_plat_mutex_lock(&rt->act_lock);
-    rt_node* w = q_pop_wakeable(&s->waitq);
-    coro_plat_mutex_unlock(&rt->act_lock);
-    while (w) {
-        int live = !coro_cancel_pending(w->coro) &&
-                   coro_get_state(w->coro) != CORO_RUNNING &&
-                   coro_get_state(w->coro) != CORO_DEAD;
-        if (live && rt_node_wake(rt, w)) break;   /* accepted handoff */
-        if (!live) (void)rt_node_wake(rt, w);     /* reaping drive */
+    /* Same pop/classify/wake discipline as coro_rt_mutex_unlock: hold
+       act_lock across the whole handoff so a popped waiter cannot be resumed
+       by a stale delivery, retired and freed between the pop and the wake
+       (see the long note there). */
+    for (;;) {
+        rt_node* w;
+        int live;
+        int accepted;
         coro_plat_mutex_lock(&rt->act_lock);
         w = q_pop_wakeable(&s->waitq);
+        if (!w) {
+            coro_plat_mutex_unlock(&rt->act_lock);
+            break;
+        }
+        live = !coro_cancel_pending(w->coro) &&
+               coro_get_state(w->coro) != CORO_RUNNING &&
+               coro_get_state(w->coro) != CORO_DEAD;
+        accepted = rt_node_wake_locked(w);
         coro_plat_mutex_unlock(&rt->act_lock);
+        rt_signal_activity(rt);
+        if (live && accepted) break;   /* accepted handoff */
     }
     return CORO_OK;
 }
@@ -675,16 +694,23 @@ coro_status coro_rt_rwlock_rdunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
         for (;;) {
             rt_node* r = (rt_node*)q_pop_wakeable(&l->rd_waitq);
             if (!r) break;
+            (void)rt_node_wake_locked(r);
             coro_plat_mutex_unlock(&rt->act_lock);
-            rt_node_wake(rt, r);
+            rt_signal_activity(rt);
             coro_plat_mutex_lock(&rt->act_lock);
         }
     }
+    /* Hold the lock across the writer handoff's pop+wake; a popped writer can
+       otherwise be resumed, retired and freed before the wake (UAF). */
+    int woken = w ? rt_node_wake_locked(w) : 0;
     coro_plat_mutex_unlock(&rt->act_lock);
-    while (w && !rt_node_wake(rt, w)) {
+    if (w) rt_signal_activity(rt);
+    while (w && !woken) {
         coro_plat_mutex_lock(&rt->act_lock);
         w = rw_pop_writer(l);
+        woken = w ? rt_node_wake_locked(w) : 0;
         coro_plat_mutex_unlock(&rt->act_lock);
+        if (w) rt_signal_activity(rt);
     }
     return CORO_OK;
 }
@@ -754,16 +780,21 @@ coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
         for (;;) {
             rt_node* r = (rt_node*)q_pop_wakeable(&l->rd_waitq);
             if (!r) break;
+            (void)rt_node_wake_locked(r);
             coro_plat_mutex_unlock(&rt->act_lock);
-            rt_node_wake(rt, r);
+            rt_signal_activity(rt);
             coro_plat_mutex_lock(&rt->act_lock);
         }
     }
+    int woken = w ? rt_node_wake_locked(w) : 0;
     coro_plat_mutex_unlock(&rt->act_lock);
-    while (w && !rt_node_wake(rt, w)) {
+    if (w) rt_signal_activity(rt);
+    while (w && !woken) {
         coro_plat_mutex_lock(&rt->act_lock);
         w = rw_pop_writer(l);
+        woken = w ? rt_node_wake_locked(w) : 0;
         coro_plat_mutex_unlock(&rt->act_lock);
+        if (w) rt_signal_activity(rt);
     }
     return CORO_OK;
 }
@@ -773,9 +804,11 @@ coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
 /* A bounded or unbounded FIFO of opaque void* values between coroutines of
    one runtime. The ring is guarded by the runtime's activity lock, exactly
    like the semaphore, so the park/wake protocol is the one already proven
-   there: every mutation happens under the lock, and the wake happens outside
-   it -- rt_node_wake re-locks the activity lock through signal_activity, so
-   holding it across a wake would self-deadlock (see rt.c's signal_activity).
+   there: every mutation happens under the lock, and each wake is issued under
+   the same lock (the locked wake variant), with the idle signal raised only
+   after the unlock. Waking under the lock is required: a node popped/detached
+   from a chain can otherwise be resumed by a stale delivery, retired and freed
+   before the wake touches it (use-after-free).
 
    The handshake is 1:1: a successful send wakes at most one parked receiver
    and a successful receive wakes at most one parked sender, so a queued value
@@ -783,14 +816,15 @@ coro_status coro_rt_rwlock_wrunlock(coro_rt_t* rt, coro_rt_rwlock_t* l) {
    that is woken retries its own operation first (the same rule the mutex
    uses), so a grant handed to it is never lost. */
 
-/* Wake every node on the local chain `head` (act_lock NOT held). The nodes
-   were detached from the channel's chain under the lock; the walk uses the
-   saved next pointers before each wake. */
-static void ch_wake_all(coro_rt_t* rt, rt_node* head) {
+/* Wake every node on the local chain `head` (act_lock held). The nodes were
+   detached from the channel's chain under the lock; waking them while the lock
+   is still held keeps each from being resumed, retired and freed between the
+   detach and the wake. The caller raises the idle signal after unlocking. */
+static void ch_wake_all_locked(rt_node* head) {
     while (head) {
         rt_node* next = (rt_node*)head->waiter_next;
         head->waiter_next = NULL;
-        rt_node_wake(rt, head);
+        (void)rt_node_wake_locked(head);
         head = next;
     }
 }
@@ -877,14 +911,16 @@ coro_status coro_rt_channel_close(coro_rt_t* rt, coro_rt_channel_t* ch) {
     if (!rt || !ch) return CORO_EINVAL;
     coro_plat_mutex_lock(&rt->act_lock);
     coro_at_store(&ch->closed, 1);
-    /* Collect both chains under the lock so the wakers run outside it. */
+    /* Collect both chains under the lock and wake them under the same lock so
+       a detached waiter cannot be freed before its wake. */
     rt_node* senders = (rt_node*)ch->sendq;
     rt_node* receivers = (rt_node*)ch->recvq;
     ch->sendq = NULL;
     ch->recvq = NULL;
+    ch_wake_all_locked(senders);
+    ch_wake_all_locked(receivers);
     coro_plat_mutex_unlock(&rt->act_lock);
-    ch_wake_all(rt, senders);
-    ch_wake_all(rt, receivers);
+    rt_signal_activity(rt);
     return CORO_OK;   /* idempotent */
 }
 
@@ -919,8 +955,9 @@ coro_status coro_rt_channel_trysend(coro_rt_t* rt, coro_rt_channel_t* ch,
     ch->slots[(ch->head + ch->len) % ch->cap] = v;
     ++ch->len;
     rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
+    if (r) (void)rt_node_wake_locked(r);
     coro_plat_mutex_unlock(&rt->act_lock);
-    if (r) rt_node_wake(rt, r);
+    if (r) rt_signal_activity(rt);
     return CORO_OK;
 }
 
@@ -953,8 +990,9 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
             ch->slots[(ch->head + ch->len) % ch->cap] = v;
             ++ch->len;
             rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
+            if (r) (void)rt_node_wake_locked(r);
             coro_plat_mutex_unlock(&rt->act_lock);
-            if (r) rt_node_wake(rt, r);
+            if (r) rt_signal_activity(rt);
             return CORO_OK;
         }
         rt_chain_park(&ch->sendq, self);
@@ -977,8 +1015,9 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
                 ch->slots[(ch->head + ch->len) % ch->cap] = v;
                 ++ch->len;
                 rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
+                if (r) (void)rt_node_wake_locked(r);
                 coro_plat_mutex_unlock(&rt->act_lock);
-                if (r) rt_node_wake(rt, r);
+                if (r) rt_signal_activity(rt);
                 return CORO_OK;
             }
             coro_plat_mutex_unlock(&rt->act_lock);
@@ -1000,8 +1039,9 @@ coro_status coro_rt_channel_tryrecv(coro_rt_t* rt, coro_rt_channel_t* ch,
         ch->head = (ch->head + 1) % ch->cap;
         --ch->len;
         rt_node* s = (rt_node*)q_pop_wakeable(&ch->sendq);
+        if (s) (void)rt_node_wake_locked(s);
         coro_plat_mutex_unlock(&rt->act_lock);
-        if (s) rt_node_wake(rt, s);    /* its slot is free again */
+        if (s) rt_signal_activity(rt);   /* its slot is free again */
         if (out) *out = v;
         return CORO_OK;
     }
@@ -1030,8 +1070,9 @@ coro_status coro_rt_channel_recv(coro_rt_t* rt, coro_rt_channel_t* ch,
             ch->head = (ch->head + 1) % ch->cap;
             --ch->len;
             rt_node* s = (rt_node*)q_pop_wakeable(&ch->sendq);
+            if (s) (void)rt_node_wake_locked(s);
             coro_plat_mutex_unlock(&rt->act_lock);
-            if (s) rt_node_wake(rt, s);
+            if (s) rt_signal_activity(rt);
             if (out) *out = v;
             return CORO_OK;
         }
