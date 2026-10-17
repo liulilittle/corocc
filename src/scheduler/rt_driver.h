@@ -27,6 +27,7 @@
  */
 #include <corocc/coro_rt_driver.h>
 
+#include "arch/coro_atomic.h"
 #include "scheduler/rt.h"
 
 #ifndef COROCC_RT_DRIVER
@@ -60,13 +61,40 @@ struct coro_rt_driver {
  */
 static inline uint64_t rt_now(const coro_rt_t* rt) {
 #if COROCC_RT_DRIVER
-    if (rt->drv && rt->drv->ops.now) {
-        return rt->drv->ops.now(rt->drv->ctx);
+    coro_rt_driver_t* d =
+        (coro_rt_driver_t*)coro_atp_load((const volatile uintptr_t*)&rt->drv);
+    if (d && d->ops.now) {
+        return d->ops.now(d->ctx);
     }
 #else
     (void)rt;
 #endif
     return coro_monotonic_ns();
 }
+
+/* ---- runtime services attach/detach/pump rely on (defined in rt.c) ---- */
+
+/**
+ * rt_signal_activity -- raise the runtime's activity signal.
+ *
+ * With a driver attached the doorbell runs first (outside the activity lock,
+ * per the wake contract); the built-in broadcast always follows, so worker
+ * threads sleeping on the activity condition are woken in either family.
+ */
+void rt_signal_activity(coro_rt_t* rt);
+
+/**
+ * rt_alarm_wake -- the runtime's alarm callback.
+ *
+ * A driver invokes it on its own thread when an armed alarm fires; @p arg is
+ * the runtime. It raises the activity signal so the worker whose deadline just
+ * passed re-collects its timer heap. It never blocks the caller.
+ */
+void rt_alarm_wake(void* arg);
+
+/* ---- registry service (defined in rt_driver.c) ---- */
+
+/** rt_driver_registered -- whether drv is an instance the registry owns. */
+int rt_driver_registered(const coro_rt_driver_t* drv);
 
 #endif /* COROCC_SCHEDULER_RT_DRIVER_H */

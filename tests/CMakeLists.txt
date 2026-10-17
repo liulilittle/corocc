@@ -268,6 +268,20 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     target_link_libraries(test_rt_driver_registry PRIVATE corocc Threads::Threads)
     add_test(NAME rt_driver_registry COMMAND test_rt_driver_registry)
 
+    # B2: the driver vtable contract (recording fake driver) and runtime
+    # hot-plugging (attach/detach on a live runtime, single-thread pump).
+    add_executable(test_rt_driver_vtable unit/test_rt_driver_vtable.c)
+    target_include_directories(test_rt_driver_vtable PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_driver_vtable PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_driver_vtable COMMAND test_rt_driver_vtable)
+    set_tests_properties(rt_driver_vtable PROPERTIES TIMEOUT 120)
+
+    add_executable(test_rt_driver_hotplug unit/test_rt_driver_hotplug.c)
+    target_include_directories(test_rt_driver_hotplug PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(test_rt_driver_hotplug PRIVATE corocc Threads::Threads)
+    add_test(NAME rt_driver_hotplug COMMAND test_rt_driver_hotplug)
+    set_tests_properties(rt_driver_hotplug PROPERTIES TIMEOUT 120)
+
 # Custom allocator interface.
 add_executable(test_coro_allocator unit/test_coro_allocator.c)
 target_link_libraries(test_coro_allocator PRIVATE corocc)

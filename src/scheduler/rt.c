@@ -142,14 +142,17 @@ static void live_notify(coro_rt_t* rt) {
 
 /* Wake every idle worker: bump the generation under the activity lock and
    broadcast, so a producer that raises work always wakes the sleepers. When a
-   driver is attached its doorbell replaces the broadcast entirely; the driver
-   contract (no synchronous call back into the runtime) is what makes this a
-   drop-in for the act_lock path below. */
+   driver is attached its doorbell runs first, outside the activity lock (the
+   wake contract forbids re-entering the runtime synchronously, and a driver
+   may lock its own state here). The built-in broadcast always follows, because
+   in the SIGNAL family the worker threads still sleep on the activity
+   condition (invariant I5). With no driver attached the body is unchanged. */
 static void signal_activity(coro_rt_t* rt) {
 #if COROCC_RT_DRIVER
-    if (rt->drv) {
-        rt->drv->ops.wake(rt->drv->ctx);
-        return;
+    coro_rt_driver_t* d =
+        (coro_rt_driver_t*)coro_atp_load((const volatile uintptr_t*)&rt->drv);
+    if (d) {
+        d->ops.wake(d->ctx);
     }
 #endif
     coro_plat_mutex_lock(&rt->act_lock);
@@ -157,6 +160,13 @@ static void signal_activity(coro_rt_t* rt) {
     coro_plat_cond_broadcast(&rt->act_cond);
     coro_plat_mutex_unlock(&rt->act_lock);
 }
+
+void rt_signal_activity(coro_rt_t* rt) { signal_activity(rt); }
+
+/* The driver alarm callback: invoked on the driver's thread when an armed
+   deadline fires. Waking the activity condition lets the worker whose deadline
+   passed re-collect its heap; the doorbell is raised by signal_activity too. */
+void rt_alarm_wake(void* arg) { signal_activity((coro_rt_t*)arg); }
 
 /* Requeue a parked node onto its owner worker and raise the idle signal. The
    node must be off any wait chain; the caller owns that invariant. The WAITING
@@ -354,18 +364,15 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
 
 /* ---- worker loop ---- */
 
-static void worker_main(void* pv) {
-    rt_worker* w = (rt_worker*)pv;
-    coro_rt_t* rt = w->rt;
+/* Drive up to budget runnable nodes: one round of collect + drain, then pop
+   (or steal) and drive. Returns the number of nodes taken off the run queue. */
+size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
+    size_t done = 0;
+    collect_expired(w);
+    drain_inbox(w);
 
-    for (;;) {
-        rt_node* n;
-        if (coro_at_load((volatile uint64_t*)&w->stop)) break;
-
-        collect_expired(w);
-        drain_inbox(w);
-
-        n = wsdeque_pop(&w->queue);
+    while (done < budget) {
+        rt_node* n = wsdeque_pop(&w->queue);
         if (!n) {
             size_t first = (size_t)(w - rt->workers);
             for (size_t i = 1; i < rt->nworkers; ++i) {
@@ -374,8 +381,10 @@ static void worker_main(void* pv) {
                 if (n) break;
             }
         }
+        if (!n) break;
+        ++done;
 
-        if (n) {
+        {
             coro_token next = CORO_TOKEN_NONE;
             coro_status st;
             /* BT: consuming this deque entry releases the node's single
@@ -422,34 +431,119 @@ static void worker_main(void* pv) {
                     signal_activity(rt);
                 }
             }
-            /* The claim was lost (CORO_EBUSY busy, CORO_ESTALE parked at a
-               newer token, or CORO_EDESTROYED already dead): the driver that
-               holds the coroutine owns its requeue and its reclaim, so this
-               worker must not touch the node -- destroying it here would free
-               a live coroutine. */
+        }
+    }
+    return done;
+}
+
+/* Put a worker to sleep until work appears or its nearest deadline passes.
+   With a driver that arms alarms the deadline is handed to the driver and the
+   worker waits on the activity condition without a timeout (the driver's alarm
+   wakes it); otherwise the built-in partial wait is used. The generation
+   snapshot makes a concurrent driver switch re-evaluate instead of sleeping
+   under a mechanism the switch just retired. */
+static void worker_sleep(coro_rt_t* rt, rt_worker* w, uint64_t deadline) {
+    int wait_untimed = 0;
+#if COROCC_RT_DRIVER
+    uint64_t gen;
+    int use_driver;
+    coro_plat_mutex_lock(&rt->drv_lock);
+    gen = coro_at_load((volatile uint64_t*)&rt->drv_gen);
+    coro_rt_driver_t* d =
+        (coro_rt_driver_t*)coro_atp_load((const volatile uintptr_t*)&rt->drv);
+    use_driver = (d && d->ops.timer_arm) ? 1 : 0;
+    if (!use_driver) {
+        if (w->alarm_armed) {
+            coro_rt_driver_t* od = (coro_rt_driver_t*)w->alarm_driver;
+            if (od && od->ops.timer_cancel) {
+                (void)od->ops.timer_cancel(od->ctx, w->alarm_req);
+            }
+            w->alarm_armed = 0;
+        }
+    } else if (deadline == 0) {
+        if (w->alarm_armed) {
+            if (d->ops.timer_cancel) {
+                (void)d->ops.timer_cancel(d->ctx, w->alarm_req);
+            }
+            w->alarm_armed = 0;
+        }
+    } else if (!w->alarm_armed || w->alarm_deadline != deadline ||
+               w->alarm_gen != gen) {
+        if (w->alarm_armed) {
+            coro_rt_driver_t* od = (coro_rt_driver_t*)w->alarm_driver;
+            if (od && od->ops.timer_cancel) {
+                (void)od->ops.timer_cancel(od->ctx, w->alarm_req);
+            }
+            w->alarm_armed = 0;
+        }
+        if (d->ops.timer_arm(d->ctx, w->alarm_req, deadline, rt_alarm_wake,
+                             rt) == 0) {
+            w->alarm_armed = 1;
+            w->alarm_deadline = deadline;
+            w->alarm_gen = gen;
+            w->alarm_driver = d;
+        } else {
+            use_driver = 0; /* no alarm: fall back to the built-in timed wait */
+        }
+    }
+    wait_untimed = use_driver;
+    coro_plat_mutex_unlock(&rt->drv_lock);
+#endif
+
+    coro_plat_mutex_lock(&rt->act_lock);
+    if (!coro_at_load((volatile uint64_t*)&w->stop) &&
+        wsdeque_empty(&w->queue) && mpsc_empty(&w->inbox)
+#if COROCC_RT_DRIVER
+        && coro_at_load((volatile uint64_t*)&rt->drv_gen) == gen
+        && !(deadline != 0 && rt_now(rt) >= deadline)
+#endif
+        ) {
+        if (wait_untimed) {
+            (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
+        } else if (deadline) {
+            (void)coro_plat_cond_timedwait_ns(&rt->act_cond, &rt->act_lock,
+                                              deadline);
+        } else {
+            (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
+        }
+    }
+    coro_plat_mutex_unlock(&rt->act_lock);
+}
+
+static void worker_main(void* pv) {
+    rt_worker* w = (rt_worker*)pv;
+    coro_rt_t* rt = w->rt;
+
+    for (;;) {
+        if (coro_at_load((volatile uint64_t*)&w->stop)) break;
+
+        /* A driver switch parks every worker here while it migrates alarms.
+           The worker stays off the run queue and out of the timer heap until
+           the switch clears the barrier. */
+        if (coro_at_load((volatile uint64_t*)&rt->drv_barrier)) {
+            coro_plat_mutex_lock(&rt->act_lock);
+            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked, 1);
+            coro_plat_cond_broadcast(&rt->act_cond);
+            while (coro_at_load((volatile uint64_t*)&rt->drv_barrier) &&
+                   !coro_at_load((volatile uint64_t*)&w->stop)) {
+                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
+            }
+            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked,
+                                    (uint64_t)-1);
+            coro_plat_mutex_unlock(&rt->act_lock);
             continue;
         }
 
+        /* One node per turn keeps the hot path's shape; the budget form is for
+           the host-driven pump. */
+        if (rt_run_some(rt, w, 1) > 0) continue;
+
         /* Nothing runnable anywhere. Sleep until work appears or the nearest
-           deadline in this worker's own heap passes. The generation is read
-           under the activity lock, the same lock a producer bumps under, so a
-           wake that lands between the scan and this check moves the
-           generation and sends us back to scan instead of blocking forever. */
+           deadline in this worker's own heap passes. */
         uint64_t deadline = 0;
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
         if (t) deadline = t->deadline;
-
-        coro_plat_mutex_lock(&rt->act_lock);
-        if (!coro_at_load((volatile uint64_t*)&w->stop) &&
-            wsdeque_empty(&w->queue) && mpsc_empty(&w->inbox)) {
-            if (deadline) {
-                (void)coro_plat_cond_timedwait_ns(&rt->act_cond,
-                                                  &rt->act_lock, deadline);
-            } else {
-                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
-            }
-        }
-        coro_plat_mutex_unlock(&rt->act_lock);
+        worker_sleep(rt, w, deadline);
     }
 }
 
@@ -477,8 +571,20 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         nthreads = (size_t)n;
     }
 
-    rt->nworkers = nthreads;
-    rt->workers = (rt_worker*)calloc(nthreads, sizeof *rt->workers);
+    /* The process default selects the execution family. A LOOP default means
+       the runtime owns no worker threads: it has one pump context (worker[0])
+       and the host drives it through coro_rt_pump. Built-in and SIGNAL keep the
+       worker pool. Read once, here, before any thread starts. */
+    coro_rt_driver_t* def = coro_rt_driver_default();
+    unsigned kind = RT_DRV_BUILTIN;
+    if (def) {
+        kind = (def->ops.flags & CORO_DRIVER_FLAG_LOOP) ? RT_DRV_LOOP
+                                                        : RT_DRV_SIGNAL;
+    }
+    size_t nworkers = (kind == RT_DRV_LOOP) ? 1 : nthreads;
+
+    rt->nworkers = nworkers;
+    rt->workers = (rt_worker*)calloc(nworkers, sizeof *rt->workers);
     if (!rt->workers) {
         free(rt);
         return NULL;
@@ -490,21 +596,33 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
 #if !defined(_WIN32)
     pthread_mutex_init(&rt->act_lock, NULL);
     pthread_mutex_init(&rt->cache_lock, NULL);
+    pthread_mutex_init(&rt->drv_lock, NULL);
 #endif
     rt->cache_n = 0;
+    coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)def);
+    rt->drv_kind = kind;
+    rt->drv_gen = 0;
     coro_plat_cond_init(&rt->act_cond);
     coro_plat_cond_init(&rt->settled);
 
-    size_t started = 0;
-    for (; started < nthreads; ++started) {
-        rt_worker* w = &rt->workers[started];
+    for (size_t j = 0; j < nworkers; ++j) {
+        rt_worker* w = &rt->workers[j];
         w->rt = rt;
+        w->alarm_req = w; /* the opaque token the driver hands back */
         wsdeque_init(&w->queue);
         mpsc_init(&w->inbox);
         coro_timer_heap_init(&w->sleepers);
-        if (coro_thread_create(&w->thread, worker_main, w) != 0) break;
     }
-    if (started != nthreads) {
+    if (kind == RT_DRV_LOOP) return rt; /* host-driven; no worker threads */
+
+    size_t started = 0;
+    for (; started < nworkers; ++started) {
+        if (coro_thread_create(&rt->workers[started].thread, worker_main,
+                               &rt->workers[started]) != 0) {
+            break;
+        }
+    }
+    if (started != nworkers) {
         for (size_t j = 0; j < started; ++j) w_stop(&rt->workers[j]);
         signal_activity(rt);
         for (size_t j = 0; j < started; ++j) {
@@ -516,6 +634,7 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         pthread_cond_destroy(&rt->settled);
         pthread_mutex_destroy(&rt->act_lock);
         pthread_mutex_destroy(&rt->cache_lock);
+        pthread_mutex_destroy(&rt->drv_lock);
 #endif
         free(rt->workers);
         free(rt);
@@ -524,8 +643,10 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
     return rt;
 }
 
-/* The worker a fresh spawn goes to: round-robin across the pool. */
+/* The worker a fresh spawn goes to: round-robin across the pool, or the single
+   pump context in LOOP mode. */
 static rt_worker* spawn_worker(coro_rt_t* rt) {
+    if (rt->drv_kind == RT_DRV_LOOP) return &rt->workers[0];
     size_t i = rt->spawn_seq++ % rt->nworkers;
     return &rt->workers[i];
 }
@@ -805,11 +926,26 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
     if (!rt) return CORO_OK;
     if (coro_at_load((volatile uint64_t*)&rt->live) > 0) return CORO_EBUSY;
 
-    for (size_t i = 0; i < rt->nworkers; ++i) w_stop(&rt->workers[i]);
-    signal_activity(rt);
+    if (rt->drv_kind != RT_DRV_LOOP) {
+        for (size_t i = 0; i < rt->nworkers; ++i) w_stop(&rt->workers[i]);
+        signal_activity(rt);
+        for (size_t i = 0; i < rt->nworkers; ++i) {
+            coro_thread_join(rt->workers[i].thread);
+        }
+    }
+    /* Withdraw any alarm still outstanding on an attached driver before the
+       runtime -- which is the alarm callback's argument -- goes away. No lock
+       is needed: every worker has stopped (or never started in LOOP mode). */
     for (size_t i = 0; i < rt->nworkers; ++i) {
-        coro_thread_join(rt->workers[i].thread);
-        coro_timer_heap_destroy(&rt->workers[i].sleepers);
+        rt_worker* w = &rt->workers[i];
+        if (w->alarm_armed) {
+            coro_rt_driver_t* od = (coro_rt_driver_t*)w->alarm_driver;
+            if (od && od->ops.timer_cancel) {
+                (void)od->ops.timer_cancel(od->ctx, w->alarm_req);
+            }
+            w->alarm_armed = 0;
+        }
+        coro_timer_heap_destroy(&w->sleepers);
     }
     /* Workers are stopped, so no retire can be pushing: release the parked
        stacks the pool still holds. */
@@ -822,6 +958,7 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
     pthread_cond_destroy(&rt->settled);
     pthread_mutex_destroy(&rt->act_lock);
     pthread_mutex_destroy(&rt->cache_lock);
+    pthread_mutex_destroy(&rt->drv_lock);
 #endif
     free(rt->workers);
     free(rt);

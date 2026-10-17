@@ -88,6 +88,16 @@ struct rt_worker {
     coro_timer_heap sleepers;     /**< deadlines; this worker is the only writer. */
     rt_node*        running;      /**< node being driven right now. */
     uint64_t        stop;         /**< shutdown requested (atomic). */
+    /* B2: this worker's alarm, owned by the attached driver. All of these are
+       written only under coro_rt.drv_lock (by the worker, or by attach
+       re-arming it), so a driver switch can migrate the alarm safely. The token
+       is an opaque value the driver hands back; the runtime uses the worker
+       pointer itself. */
+    void*           alarm_req;      /**< opaque alarm token handed to the driver. */
+    void*           alarm_driver;   /**< driver that armed alarm_req (may be stale). */
+    int             alarm_armed;    /**< 1 while an alarm is outstanding. */
+    uint64_t        alarm_deadline; /**< the deadline alarm_req was armed for. */
+    uint64_t        alarm_gen;      /**< drv_gen the alarm was armed under. */
 };
 
 /* ---- synchronization primitives (rt_sync.c) ---- */
@@ -148,6 +158,35 @@ struct coro_rt {
     coro_rt_driver_t* drv;        /**< attached driver, or NULL for the built-in
                                        EDSM backend (B1 leaves it NULL: the
                                        attach/detach machine lands in B2). */
+    /* B2 driver state. drv_kind is RT_DRV_*; drv_lock serializes attach/detach
+       against a worker arming its own alarm, and guards the workers' alarm_*
+       fields. drv_gen is bumped on every switch (an alarm armed under an older
+       generation is stale). drv_barrier freezes workers at the top of their
+       loop while a switch migrates alarms; drv_parked counts the workers parked
+       on it. pump_active is a re-entrancy guard for coro_rt_pump. */
+    coro_plat_mutex_t drv_lock;
+    unsigned          drv_kind;
+    uint64_t          drv_gen;
+    uint64_t          drv_barrier;   /**< atomic: 1 = workers hold at the barrier. */
+    uint64_t          drv_parked;    /**< atomic: workers currently parked. */
+    uint64_t          pump_active;   /**< atomic: a pump is inside rt_run_some. */
 };
+
+/* Driver families (coro_rt.drv_kind). */
+#define RT_DRV_BUILTIN 0u   /**< no driver: the built-in EDSM backend. */
+#define RT_DRV_SIGNAL  1u   /**< worker threads stay; driver doorbell/clock/alarm. */
+#define RT_DRV_LOOP    2u   /**< no worker threads; the host calls coro_rt_pump. */
+
+/**
+ * rt_run_some -- drive up to @p budget runnable nodes for worker @p w.
+ *
+ * One round of the worker loop: drain expirations and the inbox, then pop (or
+ * steal) and drive runnable nodes until @p budget is spent or the runtime has
+ * nothing runnable. Never blocks, never touches the timer heap's deadlines
+ * except through expiration. Returns the number of nodes taken off the run
+ * queue (0 = nothing was runnable). worker_main calls it with budget 1 to keep
+ * its one-node-per-turn shape; coro_rt_pump calls it with the host's budget.
+ */
+size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget);
 
 #endif /* COROCC_SCHEDULER_RT_H */

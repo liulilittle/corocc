@@ -22,9 +22,11 @@
 #ifndef COROCC_CORO_RT_DRIVER_H
 #define COROCC_CORO_RT_DRIVER_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "coro_status.h"
+#include "coro_rt.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -189,6 +191,64 @@ COROCC_API coro_status coro_rt_driver_set_default(coro_rt_driver_t* drv);
  *         effect.
  */
 COROCC_API coro_rt_driver_t* coro_rt_driver_default(void);
+
+/**
+ * coro_rt_attach_driver -- switch the driver a runtime uses.
+ *
+ * NULL is equivalent to coro_rt_detach_driver (restore the built-in EDSM
+ * backend). The built-in and SIGNAL drivers may be swapped at any time, even
+ * with coroutines parked: the runtime re-arms each worker's pending alarm
+ * against the new driver, so no deadline is lost. LOOP is a different execution
+ * model (no worker threads), so v1 refuses every cross-family switch with
+ * CORO_EBUSY (a LOOP runtime must be created from a LOOP default); a same-family
+ * re-attach is allowed.
+ *
+ * The caller must keep the driver registered and its ctx alive for the whole
+ * attach.
+ *
+ * @return CORO_OK on success (including a same-driver no-op); CORO_EINVAL for a
+ *         NULL runtime or a driver the registry does not own; CORO_EBUSY for a
+ *         cross-family switch or when the runtime cannot be quiesced in time.
+ */
+COROCC_API coro_status coro_rt_attach_driver(coro_rt_t* rt,
+                                             coro_rt_driver_t* drv);
+
+/**
+ * coro_rt_detach_driver -- restore the built-in EDSM backend.
+ *
+ * Equivalent to coro_rt_attach_driver(rt, NULL). Refused with CORO_EBUSY on a
+ * LOOP runtime (its worker threads were never started, so v1 cannot rebuild
+ * them).
+ *
+ * @return CORO_OK on success (also when no driver is attached); CORO_EINVAL for
+ *         a NULL runtime; CORO_EBUSY on a LOOP runtime.
+ */
+COROCC_API coro_status coro_rt_detach_driver(coro_rt_t* rt);
+
+/**
+ * coro_rt_attached_driver -- the driver currently attached to a runtime.
+ *
+ * @return The attached driver, or NULL for the built-in EDSM backend (and for a
+ *         NULL runtime).
+ */
+COROCC_API coro_rt_driver_t* coro_rt_attached_driver(const coro_rt_t* rt);
+
+/**
+ * coro_rt_pump -- run one bounded turn of a LOOP runtime.
+ *
+ * A runtime created from a LOOP default driver has no worker threads: the host
+ * loop drives progress by calling coro_rt_pump. Each call drains expirations,
+ * the inbox and the run queue of worker[0] up to @p budget runnable nodes
+ * (budget 0 means "until nothing is runnable"), then returns; it never blocks.
+ * When the loop has nothing to run, the host schedules another pump from the
+ * driver's wake callback.
+ *
+ * @param rt      Runtime to pump.
+ * @param budget  Maximum nodes to drive this turn; 0 drains everything runnable.
+ * @return CORO_OK; CORO_EINVAL for a NULL runtime; CORO_EBUSY when the runtime
+ *         is not a LOOP runtime, or when a pump is already running on it.
+ */
+COROCC_API coro_status coro_rt_pump(coro_rt_t* rt, size_t budget);
 
 #ifdef __cplusplus
 } /* extern "C" */
