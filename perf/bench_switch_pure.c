@@ -24,16 +24,19 @@
  *   - 5 timed repeats; the median is the reported figure and the gate
  *     judgement (a single run at the 20M/s gate is noise: the measured
  *     margin is only a few percent);
- *   - gate: >= 20M round-trips/s (>= 40M ctx switches/s, <= 50ns per
- *     round trip). Falling below the gate exits NONZERO;
+ *   - gate: strict (default) >= 20M round-trips/s (>= 40M ctx switches/s,
+ *     <= 50ns per round trip); loose (--loose) >= 10M round-trips/s -- the
+ *     shared/noisy CI-runner setting. Falling below the gate exits NONZERO;
  *   - the allocation side (spawn/collect, and destroy once) is timed
  *     separately, after the pure window;
  *   - every collect in the allocation section must return CORO_OK (the
  *     EBUSY retry contract is exercised under wait_all; a failure fails
  *     the benchmark).
  *
- *   usage: bench_switch_pure [ncoro]   (default 8; pass 1 for the hottest
- *                                        single-coroutine round trip)
+ *   usage: bench_switch_pure [ncoro] [--loose]   (default 8; pass 1 for the
+ *                                   hottest single-coroutine round trip;
+ *                                   --loose relaxes the gate to 10M/s for
+ *                                   shared CI runners)
  */
 #define _POSIX_C_SOURCE 200112L
 #include <corocc/coro.h>
@@ -42,6 +45,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #if defined(_WIN32)
@@ -51,7 +55,8 @@
 #define SW_ITERS    4000000UL   /* round trips per coroutine */
 #define ALLOC_ROUNDS 20000      /* spawn/collect cost sampling rounds */
 #define REPEATS     5           /* timed repeats; the median is reported */
-#define GATE_RT_S   20e6        /* gate: round trips per second */
+#define GATE_RT_S       20e6    /* strict gate: round trips per second */
+#define GATE_RT_S_LOOSE 10e6    /* loose gate (shared/noisy CI runners) */
 
 static coro_rt_t* g_rt;
 static volatile int g_go;
@@ -122,9 +127,17 @@ static double pure_repeat(int ncoro, unsigned long* out_total) {
 }
 
 int main(int argc, char** argv) {
-    int ncoro = argc > 1 ? atoi(argv[1]) : 8;
-    if (ncoro < 1) ncoro = 1;
-    if (ncoro > MAX_CORO) ncoro = MAX_CORO;
+    int ncoro = 8;
+    double gate_rt = GATE_RT_S;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--loose") == 0) {
+            gate_rt = GATE_RT_S_LOOSE;
+        } else {
+            ncoro = atoi(argv[i]);
+            if (ncoro < 1) ncoro = 1;
+            if (ncoro > MAX_CORO) ncoro = MAX_CORO;
+        }
+    }
     int rc = 0;
 
     g_rt = coro_rt_create(1);            /* single worker: the hot path */
@@ -150,12 +163,13 @@ int main(int argc, char** argv) {
     printf("pure switch: MEDIAN %.1fM round-trips/s (%.1f ns/round-trip, "
            "%.1f ns/context-switch; switches=%lu)\n",
            med_rt_s / 1e6, med, med / 2.0, total);
-    if (med_rt_s < GATE_RT_S) {
-        printf("pure switch: BELOW the 20M round-trips/s gate (50ns) -- "
-               "GATE FAIL\n");
+    if (med_rt_s < gate_rt) {
+        printf("pure switch: BELOW the %.0fM round-trips/s gate (%.0fns) -- "
+               "GATE FAIL\n", gate_rt / 1e6, 1e9 / gate_rt);
         rc = 4;
     } else {
-        printf("pure switch: gate 20M round-trips/s PASSED\n");
+        printf("pure switch: gate %.0fM round-trips/s PASSED\n",
+               gate_rt / 1e6);
     }
 
     /* ---- allocation side: spawn + collect + destroy, timed separately ---- */

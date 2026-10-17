@@ -132,7 +132,7 @@ push and pull request:
 
 `perf-report` runs on every push and pull request (and on manual or scheduled
 runs). It is report-only (never gates) and publishes the benchmark numbers as
-the `perf-report` artifact.
+the `perf-report` artifact (CI runs the gates in loose mode).
 
 ## Known boundaries
 

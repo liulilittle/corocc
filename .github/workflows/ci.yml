@@ -329,7 +329,8 @@ jobs:
           cmake --build build-ndk -j2
 
   # Report-only: never a required check; runs on every push/PR and on
-  # manual/scheduled runs too.
+  # manual/scheduled runs too. The C/C++ gates are calibrated for reference
+  # hardware; shared CI runners run them loose (--loose) to absorb noise.
   perf-report:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -345,9 +346,9 @@ jobs:
         run: |
           mkdir -p ci-logs/perf
           { ./build-perf/tests/bench_switch
-            ./build-perf/tests/bench_switch_pure
+            ./build-perf/tests/bench_switch_pure --loose
             ./build-perf/tests/bench_rt_mn ; } 2>&1 | tee ci-logs/perf/bench-c.log
-          ./build-perf/tests/bench_cpp_switch 2>&1 | tee ci-logs/perf/bench-cpp-strict.log
+          ./build-perf/tests/bench_cpp_switch --loose 2>&1 | tee ci-logs/perf/bench-cpp-strict.log
       - name: summary (report-only; surfaced on the run page)
         run: |
           {

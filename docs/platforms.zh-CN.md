@@ -122,7 +122,7 @@ ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 �
 | `ci-summary` | 汇总各任务;除显式白名单外,被跳过(skipped)的任务会使汇总失败。 |
 
 `perf-report` 在每次 push/PR 上运行(手动或定时触发也运行);report-only(非门禁),
-产物为 `perf-report`,发布基准数字。
+产物为 `perf-report`,发布基准数字(CI 以 loose 门运行)。
 
 ## 已知边界
 
