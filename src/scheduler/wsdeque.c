@@ -29,6 +29,29 @@
 
 #include <string.h>
 
+/* The owner's bottom accesses go through relaxed atomics, not plain reads/
+   stores: a stealer reads bottom atomically, and a plain access racing an
+   atomic one is a data race under the C model that clang -O3 can exploit
+   (a lost node then freezes the runtime under oversubscription). The owner
+   needs no ordering of its OWN accesses, so relaxed is correct and compiles
+   to a plain load/store on every target; the cross-thread publication keeps
+   its release/acquire forms below. */
+#if defined(__GNUC__) || defined(__clang__)
+static inline uint64_t wsd_bottom_load(const wsdeque* d) {
+    return __atomic_load_n((const uint64_t*)&d->bottom, __ATOMIC_RELAXED);
+}
+static inline void wsd_bottom_store(wsdeque* d, uint64_t v) {
+    __atomic_store_n((uint64_t*)&d->bottom, v, __ATOMIC_RELAXED);
+}
+#else
+static inline uint64_t wsd_bottom_load(const wsdeque* d) {
+    return *(volatile const uint64_t*)&d->bottom;
+}
+static inline void wsd_bottom_store(wsdeque* d, uint64_t v) {
+    *(volatile uint64_t*)&d->bottom = v;
+}
+#endif
+
 void wsdeque_init(wsdeque* d) {
     d->top = 0;
     d->bottom = 0;
@@ -36,7 +59,7 @@ void wsdeque_init(wsdeque* d) {
 }
 
 void wsdeque_push(wsdeque* d, rt_node* n) {
-    uint64_t b = d->bottom;
+    uint64_t b = wsd_bottom_load(d);
     d->cells[b & WSDEQUE_MASK] = n;
     /* Publish the node before advancing bottom: a thief that sees the new
        bottom must be able to read the cell it points at. */
@@ -44,9 +67,9 @@ void wsdeque_push(wsdeque* d, rt_node* n) {
 }
 
 rt_node* wsdeque_pop(wsdeque* d) {
-    if (d->bottom == 0) return NULL;
-    uint64_t old_bottom = d->bottom;
-    uint64_t b = d->bottom - 1;
+    if (wsd_bottom_load(d) == 0) return NULL;
+    uint64_t old_bottom = wsd_bottom_load(d);
+    uint64_t b = old_bottom - 1;
     coro_at_store((volatile uint64_t*)&d->bottom, b); /* reserve the slot */
     /* Order the bottom store before the top load (paper's take barrier): a
        thief that sees the reserved bottom must not race us for the same
@@ -70,7 +93,7 @@ rt_node* wsdeque_pop(wsdeque* d) {
                a hole that makes the next push overwrite the consumed slot. */
             coro_at_store((volatile uint64_t*)&d->bottom, t + 1);
         } else {
-            d->bottom = b; /* keep the reservation: we consumed the slot */
+            wsd_bottom_store(d, b); /* keep the reservation: we consumed the slot */
         }
         return n;
     }
