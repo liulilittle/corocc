@@ -199,27 +199,70 @@ static void rt_driver_rearm_locked(coro_rt_t* rt, rt_worker* w,
     }
 }
 
+/* Wait until every worker has entered its loop and stopped at the barrier.
+ *
+ * The caller has set rt->drv_barrier and must clear it on failure. Two phases:
+ * first the start handshake (every worker thread has reached worker_main), then
+ * the park itself (every worker has reached the barrier and is off the run
+ * queue). Each phase has a generous upper bound -- five seconds -- so a slow or
+ * emulated host, or a worker the OS simply has not scheduled yet, cannot turn a
+ * healthy switch into a spurious EBUSY. A real timeout means a worker is stuck
+ * mid-drive and cannot be parked, which is exactly when the switch must refuse.
+ *
+ * Cross-class switches only: a same-family switch never parks a worker and has
+ * no wall-clock dependence at all (the B2fix property preserved here). */
+static int rt_quiesce_wait(coro_rt_t* rt) {
+    rt_signal_activity(rt); /* prod every worker toward the barrier */
+    coro_plat_mutex_lock(&rt->act_lock);
+    uint64_t d1 = coro_monotonic_ns() + 5000000000ull; /* 5 s: start handshake */
+    while (coro_at_load((volatile uint64_t*)&rt->drv_started) < rt->nworkers) {
+        if (coro_plat_cond_timedwait_ns(&rt->act_cond, &rt->act_lock, d1) != 0) {
+            break;
+        }
+    }
+    uint64_t d2 = coro_monotonic_ns() + 5000000000ull; /* 5 s: park */
+    while (coro_at_load((volatile uint64_t*)&rt->drv_parked) < rt->nworkers) {
+        if (coro_plat_cond_timedwait_ns(&rt->act_cond, &rt->act_lock, d2) != 0) {
+            break;
+        }
+    }
+    int ok = coro_at_load((volatile uint64_t*)&rt->drv_started) >= rt->nworkers &&
+             coro_at_load((volatile uint64_t*)&rt->drv_parked) >= rt->nworkers;
+    coro_plat_mutex_unlock(&rt->act_lock);
+    return ok;
+}
+
 /* The common switch path; drv == NULL means the built-in backend.
  *
- * A same-family switch (BUILTIN <-> SIGNAL <-> SIGNAL) is O(1) and never parks
- * a worker: under drv_lock it withdraws each worker's outstanding alarm from
- * the old driver and re-arms it, at the same stored deadline, on the new one,
- * then publishes the new driver and bumps drv_gen. Serializing on drv_lock is
- * what makes that safe against a worker arming or cancelling its own alarm in
- * worker_sleep (which takes the same lock); the generation bump is the worker's
- * self-heal -- worker_sleep re-evaluates whenever drv_gen changed since it read
- * it, so a worker mid-sleep abandons the old mechanism and re-arms on the new
- * driver at its next pass.
+ * Same family (BUILTIN <-> SIGNAL <-> SIGNAL), or LOOP <-> LOOP: O(1), no
+ * worker parked, no wall-clock wait. Under drv_lock each worker's outstanding
+ * alarm is withdrawn from the old driver and re-armed on the new one at the
+ * same stored deadline, then the new driver is published and drv_gen is bumped.
+ * (A LOOP target arms nothing: the host pump's collect_expired observes
+ * deadlines, so the rearm is a withdraw.) Serializing on drv_lock is what makes
+ * that safe against a worker arming or cancelling its own alarm in worker_sleep
+ * (the same lock); the generation bump is the worker's self-heal -- worker_sleep
+ * re-evaluates whenever drv_gen changed since it read it, so a worker mid-sleep
+ * abandons the old mechanism and re-arms on the new driver at its next pass.
+ * The migration always withdraws the old alarm before dropping it, so the old
+ * driver cannot fire a stale callback after the switch.
  *
- * The migration withdraws the old alarm before dropping it (never leaves one
- * outstanding), so the old driver cannot fire a stale callback after the
- * switch -- the invariant the N2 probe pins down. With no barrier to wait on,
- * attach has no wall-clock dependence and succeeds immediately on a fresh
- * runtime whose workers have not parked yet.
+ * Cross family is a live hot switch (ruling #4, completed by B5):
+ *   - threaded -> LOOP quiesces every worker at the barrier, then withdraws
+ *     their alarms and leaves the barrier set for the whole LOOP phase, so the
+ *     parked worker threads never touch a queue while the host pumps worker[0]
+ *     through coro_rt_pump. Every in-flight deadline survives: the timer heaps
+ *     are left untouched (B3's pump pattern observes them via collect_expired).
+ *   - LOOP -> threaded releases the parked workers (starting them first if the
+ *     runtime was created in LOOP and never had threads), clears the barrier and
+ *     re-arms nothing: each worker re-arms its own alarm on the new driver the
+ *     next time it sleeps. No quiesce is needed because the workers are already
+ *     parked.
  *
- * A cross-family switch (LOOP vs. non-LOOP) is refused with CORO_EBUSY in v1:
- * LOOP changes who runs the worker loop, so a live switch needs the worker
- * quiesce barrier that runtime cross-class switching (B4) will bring back. */
+ * Any switch that touches the LOOP family refuses with CORO_EBUSY while a pump
+ * is running: the pump drives worker[0], so moving the runtime in or out of
+ * LOOP underneath it would let two threads drive the same queue. A quiesce
+ * timeout likewise rolls back to CORO_EBUSY with the runtime unchanged. */
 static coro_status rt_driver_switch(coro_rt_t* rt, coro_rt_driver_t* drv,
                                     unsigned nk) {
     coro_plat_mutex_lock(&rt->drv_lock);
@@ -230,22 +273,79 @@ static coro_status rt_driver_switch(coro_rt_t* rt, coro_rt_driver_t* drv,
         return CORO_OK; /* idempotent */
     }
     unsigned ck = rt->drv_kind;
-    /* LOOP is a different execution model: v1 refuses every cross-family
-       switch (ruling #4; runtime cross-class switching is B4). */
-    if ((ck == RT_DRV_LOOP) != (nk == RT_DRV_LOOP)) {
+    int cur_loop = (ck == RT_DRV_LOOP);
+    int new_loop = (nk == RT_DRV_LOOP);
+
+    if ((cur_loop || new_loop) &&
+        coro_at_load((volatile uint64_t*)&rt->pump_active) != 0) {
         coro_plat_mutex_unlock(&rt->drv_lock);
-        return CORO_EBUSY;
+        return CORO_EBUSY; /* a pump owns worker[0] right now */
     }
-    uint64_t new_gen = rt->drv_gen + 1;
-    for (size_t i = 0; i < rt->nworkers; ++i) {
-        rt_driver_rearm_locked(rt, &rt->workers[i], cur, drv, new_gen);
+
+    if (cur_loop == new_loop) {
+        /* Same family: migrate alarms in place and publish. A LOOP target has
+           no outstanding alarm, so it is a bare republish. */
+        uint64_t new_gen = rt->drv_gen + 1;
+        for (size_t i = 0; i < rt->nworkers; ++i) {
+            rt_driver_rearm_locked(rt, &rt->workers[i], cur,
+                                   new_loop ? NULL : drv, new_gen);
+        }
+        rt->drv_kind = nk;
+        coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)drv);
+        coro_at_store((volatile uint64_t*)&rt->drv_gen, new_gen);
+        coro_plat_mutex_unlock(&rt->drv_lock);
+        rt_signal_activity(rt);
+        return CORO_OK;
     }
-    rt->drv_kind = nk;
-    coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)drv);
-    coro_at_store((volatile uint64_t*)&rt->drv_gen, new_gen);
+
+    if (!cur_loop && new_loop) {
+        /* threaded -> LOOP: quiesce, then hold the barrier for the LOOP phase. */
+        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 1);
+        coro_plat_mutex_unlock(&rt->drv_lock);
+
+        if (!rt_quiesce_wait(rt)) {
+            coro_plat_mutex_lock(&rt->drv_lock);
+            coro_at_store((volatile uint64_t*)&rt->drv_barrier, 0);
+            coro_plat_mutex_unlock(&rt->drv_lock);
+            rt_signal_activity(rt);
+            return CORO_EBUSY; /* rollback: no state was changed */
+        }
+
+        coro_plat_mutex_lock(&rt->drv_lock);
+        uint64_t new_gen = rt->drv_gen + 1;
+        for (size_t i = 0; i < rt->nworkers; ++i) {
+            rt_driver_rearm_locked(rt, &rt->workers[i], cur, NULL, new_gen);
+        }
+        rt->drv_kind = nk;
+        coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)drv);
+        coro_at_store((volatile uint64_t*)&rt->drv_gen, new_gen);
+        /* barrier stays 1: the workers remain parked while LOOP is in effect */
+        coro_plat_mutex_unlock(&rt->drv_lock);
+        return CORO_OK;
+    }
+
+    /* LOOP -> threaded: release the parked workers back into thread mode. */
+    if (!coro_at_load((volatile uint64_t*)&rt->drv_threads)) {
+        /* A LOOP-created runtime never had threads; start them now. They hold
+           at the still-raised barrier until the release below. */
+        if (!rt_start_workers(rt)) {
+            coro_plat_mutex_unlock(&rt->drv_lock);
+            return CORO_EBUSY; /* rollback: still LOOP, barrier still held */
+        }
+    }
+    {
+        uint64_t new_gen = rt->drv_gen + 1;
+        for (size_t i = 0; i < rt->nworkers; ++i) {
+            rt_driver_rearm_locked(rt, &rt->workers[i], cur, drv, new_gen);
+        }
+        rt->drv_kind = nk;
+        coro_atp_store((volatile uintptr_t*)&rt->drv, (uintptr_t)drv);
+        coro_at_store((volatile uint64_t*)&rt->drv_gen, new_gen);
+        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 0); /* release */
+    }
     coro_plat_mutex_unlock(&rt->drv_lock);
 
-    rt_signal_activity(rt); /* release any parked workers / raise the doorbell */
+    rt_signal_activity(rt); /* wake the released workers */
     return CORO_OK;
 }
 
@@ -274,6 +374,11 @@ coro_status coro_rt_pump(coro_rt_t* rt, size_t budget) {
     if (coro_at_exchange((volatile uint64_t*)&rt->pump_active, 1) != 0) {
         return CORO_EBUSY; /* a pump is already running on this runtime */
     }
+    /* The peer workers hold at the LOOP barrier, so their expired deadlines and
+       pending inbox work are swept here (the pump thread acts as their owner)
+       and then stolen by worker[0]'s run. This is what lets a runtime switched
+       into LOOP from worker mode keep every in-flight sleep on time. */
+    rt_loop_sweep(rt);
     (void)rt_run_some(rt, &rt->workers[0], budget == 0 ? (size_t)-1 : budget);
     coro_at_store((volatile uint64_t*)&rt->pump_active, 0);
     return CORO_OK;

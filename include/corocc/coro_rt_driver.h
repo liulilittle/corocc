@@ -198,17 +198,22 @@ COROCC_API coro_rt_driver_t* coro_rt_driver_default(void);
  * NULL is equivalent to coro_rt_detach_driver (restore the built-in EDSM
  * backend). The built-in and SIGNAL drivers may be swapped at any time, even
  * with coroutines parked: the runtime re-arms each worker's pending alarm
- * against the new driver, so no deadline is lost. LOOP is a different execution
- * model (no worker threads), so v1 refuses every cross-family switch with
- * CORO_EBUSY (a LOOP runtime must be created from a LOOP default); a same-family
- * re-attach is allowed.
+ * against the new driver, so no deadline is lost.
+ *
+ * LOOP is a different execution model, and the switch between LOOP and worker
+ * mode is a live hot switch: attaching a LOOP driver quiesces every worker
+ * (they park off the run queue) and leaves them parked for the whole LOOP
+ * phase, while the host drives worker[0] through coro_rt_pump; switching back
+ * to a threaded driver releases the workers. In-flight timed parks survive both
+ * directions. Because a running pump owns worker[0], a switch that moves the
+ * runtime in or out of LOOP is refused with CORO_EBUSY while a pump is active.
  *
  * The caller must keep the driver registered and its ctx alive for the whole
  * attach.
  *
  * @return CORO_OK on success (including a same-driver no-op); CORO_EINVAL for a
- *         NULL runtime or a driver the registry does not own; CORO_EBUSY for a
- *         cross-family (LOOP vs. worker-mode) switch.
+ *         NULL runtime or a driver the registry does not own; CORO_EBUSY while a
+ *         pump is running on the runtime (a LOOP-family switch cannot race it).
  */
 COROCC_API coro_status coro_rt_attach_driver(coro_rt_t* rt,
                                              coro_rt_driver_t* drv);
@@ -216,12 +221,13 @@ COROCC_API coro_status coro_rt_attach_driver(coro_rt_t* rt,
 /**
  * coro_rt_detach_driver -- restore the built-in EDSM backend.
  *
- * Equivalent to coro_rt_attach_driver(rt, NULL). Refused with CORO_EBUSY on a
- * LOOP runtime (its worker threads were never started, so v1 cannot rebuild
- * them).
+ * Equivalent to coro_rt_attach_driver(rt, NULL). On a LOOP runtime it releases
+ * the parked workers back into thread mode (starting them if the runtime was
+ * created in LOOP and never had any). Refused with CORO_EBUSY while a pump is
+ * running.
  *
  * @return CORO_OK on success (also when no driver is attached); CORO_EINVAL for
- *         a NULL runtime; CORO_EBUSY on a LOOP runtime.
+ *         a NULL runtime; CORO_EBUSY while a pump is running.
  */
 COROCC_API coro_status coro_rt_detach_driver(coro_rt_t* rt);
 
@@ -238,7 +244,8 @@ COROCC_API coro_rt_driver_t* coro_rt_attached_driver(const coro_rt_t* rt);
  *
  * A runtime created from a LOOP default driver has no worker threads: the host
  * loop drives progress by calling coro_rt_pump. Each call drains expirations,
- * the inbox and the run queue of worker[0] up to @p budget runnable nodes
+ * the inbox and the run queue of worker[0] (sweeping any peers parked by a
+ * cross-class switch first) up to @p budget runnable nodes
  * (budget 0 means "until nothing is runnable"), then returns; it never blocks.
  * When the loop has nothing to run, the host schedules another pump from the
  * driver's wake callback.

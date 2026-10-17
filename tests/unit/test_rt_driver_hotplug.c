@@ -172,26 +172,29 @@ static void test_cancel_after_attach(void) {
     fake_stop(&f);
 }
 
-/* ---- LOOP attach on a worker-mode runtime is refused (ruling #4) ---- */
+/* ---- LOOP attach on a live worker runtime now succeeds (B5 hot switch) ---- */
 
-static void test_loop_attach_ebusy(void) {
+static void test_loop_attach_live(void) {
     coro_rt_t* rt = coro_rt_create(2);
     CHECK(rt != NULL);
     g_rt = rt;
 
     fake_driver f;
-    coro_rt_driver_t* d = fake_start("loop-refused", &f, CORO_DRIVER_FLAG_LOOP);
+    coro_rt_driver_t* d = fake_start("loop-live", &f, CORO_DRIVER_FLAG_LOOP);
     CHECK(d != NULL);
 
-    /* Idle runtime: still refused, because its worker threads cannot be
-       repurposed in v1. */
-    CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_EBUSY);
-    CHECK(coro_rt_attached_driver(rt) == NULL); /* pointer: CHECK, not CHECK_EQ */
+    /* Idle runtime: the workers quiesce promptly and the switch completes. */
+    CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK);
+    CHECK(coro_rt_attached_driver(rt) == d);
+    CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK); /* release back to worker mode */
+    CHECK(coro_rt_attached_driver(rt) == NULL);
 
     /* And while a coroutine is actively sleeping (a worker is driving). */
     coro_at_store((volatile uint64_t*)&g_completed, 0);
-    CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper, (void*)(uintptr_t)60), CORO_OK);
-    CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_EBUSY);
+    CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper, (void*)(uintptr_t)40), CORO_OK);
+    CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK); /* quiesce, then LOOP */
+    CHECK(coro_rt_attached_driver(rt) == d);
+    CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK); /* release, sleep completes */
 
     CHECK(wait_completed(1, 4000));
     coro_rt_wait_all(rt);
@@ -299,16 +302,228 @@ static void test_pump_signal_ebusy(void) {
     CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
 }
 
+/* ---- B5 cross-class hot switches (LOOP <-> worker mode) ----
+ *
+ * The runtime is a live worker pool when a LOOP driver is attached: every
+ * worker quiesces at the barrier and the host thread drives worker[0] through
+ * coro_rt_pump. In-flight timed parks must survive both directions: entering
+ * LOOP cancels outstanding alarms but leaves the timer heaps untouched, and the
+ * pump's sweep of the parked peers keeps a multi-worker runtime on time;
+ * leaving LOOP releases the workers, which re-arm their own alarms.
+ */
+
+/* ---- SIGNAL -> LOOP: in-flight timed sleeps finish under the host pump ---- */
+
+static void test_crossclass_signal_to_loop(void) {
+    coro_rt_t* rt = coro_rt_create(2);
+    CHECK(rt != NULL);
+    g_rt = rt;
+
+    fake_driver f;
+    coro_rt_driver_t* d =
+        fake_start("xclass-into-loop", &f, CORO_DRIVER_FLAG_LOOP);
+    CHECK(d != NULL);
+
+    /* Several parks, distributed round-robin over both workers: the pump must
+       sweep the peer worker's heap, not just worker[0]'s. */
+    coro_at_store((volatile uint64_t*)&g_completed, 0);
+    const uint64_t n = 10;
+    uint64_t t0 = coro_monotonic_ns();
+    for (uintptr_t i = 0; i < n; ++i) {
+        CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper,
+                               (void*)(uintptr_t)(30 + i * 4)),
+                 CORO_OK);
+    }
+    fake_sleep_ms(4); /* let them reach their parks */
+
+    CHECK_EQ(coro_rt_attach_driver(rt, d), CORO_OK); /* quiesce, then LOOP */
+    CHECK(coro_rt_attached_driver(rt) == d);
+
+    /* No worker threads drive now: the host pumps worker[0] by hand. */
+    unsigned guard = 0;
+    while (coro_at_load(&g_completed) < n && guard < 3000) {
+        CHECK_EQ(coro_rt_pump(rt, 64), CORO_OK);
+        fake_sleep_ms(1);
+        ++guard;
+    }
+    uint64_t dt = coro_monotonic_ns() - t0;
+    CHECK_EQ(coro_at_load(&g_completed), n);
+    /* Every deadline (30..66 ms) fired on the pump, none before its time. */
+    CHECK(dt >= 25ull * 1000000ull);
+    CHECK(dt <= 2000ull * 1000000ull);
+
+    CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK); /* LOOP -> worker mode */
+    CHECK(coro_rt_attached_driver(rt) == NULL);
+    coro_rt_wait_all(rt);
+    CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(d), CORO_OK);
+    fake_stop(&f);
+}
+
+/* ---- LOOP -> SIGNAL: a sleep parked under the pump finishes in thread mode ---- */
+
+static void test_crossclass_loop_to_signal(void) {
+    coro_rt_t* rt = coro_rt_create(2);
+    CHECK(rt != NULL);
+    g_rt = rt;
+
+    fake_driver fl;
+    coro_rt_driver_t* dl =
+        fake_start("xclass-out-loop", &fl, CORO_DRIVER_FLAG_LOOP);
+    CHECK(dl != NULL);
+    fake_driver fs;
+    coro_rt_driver_t* ds = fake_start("xclass-out-signal", &fs, 0);
+    CHECK(ds != NULL);
+
+    CHECK_EQ(coro_rt_attach_driver(rt, dl), CORO_OK); /* into LOOP */
+
+    coro_at_store((volatile uint64_t*)&g_completed, 0);
+    CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper, (void*)(uintptr_t)80), CORO_OK);
+    /* Pump enough to move the sleeper onto worker[0]'s heap and park it. */
+    for (int i = 0; i < 5 && coro_at_load(&g_completed) == 0; ++i) {
+        CHECK_EQ(coro_rt_pump(rt, 64), CORO_OK);
+        fake_sleep_ms(1);
+    }
+    CHECK_EQ(coro_at_load(&g_completed), 0); /* still in flight */
+
+    CHECK_EQ(coro_rt_attach_driver(rt, ds), CORO_OK); /* back to thread mode */
+    CHECK(coro_rt_attached_driver(rt) == ds);
+    CHECK(wait_completed(1, 4000));
+    CHECK_EQ(coro_at_load(&g_completed), 1);
+
+    coro_rt_wait_all(rt);
+    CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(dl), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(ds), CORO_OK);
+    fake_stop(&fl);
+    fake_stop(&fs);
+}
+
+/* ---- bounce LOOP <-> worker mode under load ---- */
+
+static void test_crossclass_bounce(void) {
+    coro_rt_t* rt = coro_rt_create(2);
+    CHECK(rt != NULL);
+    g_rt = rt;
+
+    fake_driver fl;
+    coro_rt_driver_t* dl =
+        fake_start("xclass-bounce-loop", &fl, CORO_DRIVER_FLAG_LOOP);
+    CHECK(dl != NULL);
+
+    coro_at_store((volatile uint64_t*)&g_completed, 0);
+    const uint64_t per = 4;
+    const int rounds = 8;
+    uint64_t expected = 0;
+    for (int r = 0; r < rounds; ++r) {
+        /* Into LOOP: quiesce, spawn, drive every sleep to completion. */
+        CHECK_EQ(coro_rt_attach_driver(rt, dl), CORO_OK);
+        for (uintptr_t i = 0; i < per; ++i) {
+            CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper,
+                                   (void*)(uintptr_t)(2 + (r % 3) * 2)),
+                     CORO_OK);
+        }
+        expected += per;
+        unsigned guard = 0;
+        while (coro_at_load(&g_completed) < expected && guard < 4000) {
+            CHECK_EQ(coro_rt_pump(rt, 64), CORO_OK);
+            fake_sleep_ms(1);
+            ++guard;
+        }
+        CHECK_EQ(coro_at_load(&g_completed), expected);
+
+        /* Back to worker mode: spawn into the pool, let the threads finish. */
+        CHECK_EQ(coro_rt_detach_driver(rt), CORO_OK);
+        for (uintptr_t i = 0; i < per; ++i) {
+            CHECK_EQ(coro_rt_spawn(rt, NULL, ms_sleeper,
+                                   (void*)(uintptr_t)(2 + (r % 3) * 2)),
+                     CORO_OK);
+        }
+        expected += per;
+        CHECK(wait_completed(expected, 4000));
+    }
+    CHECK_EQ(coro_at_load(&g_completed), expected);
+
+    coro_rt_wait_all(rt);
+    CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(dl), CORO_OK);
+    fake_stop(&fl);
+}
+
+/* ---- a pump owns worker[0]: moving in or out of LOOP is refused ---- */
+
+static void busy_coro(void* arg) {
+    (void)arg;
+    coro_at_store((volatile uint64_t*)&g_completed, 1); /* re-use as "in" */
+    while (coro_at_load(&g_done) == 0) { /* spin until released */ }
+}
+
+static void* pump_thread_fn(void* arg) {
+    coro_rt_t* rt = (coro_rt_t*)arg;
+    (void)coro_rt_pump(rt, 0);
+    return NULL;
+}
+
+static void test_crossclass_pump_ebusy(void) {
+    fake_driver fl;
+    coro_rt_driver_t* dl =
+        fake_start("xclass-ebusy-loop", &fl, CORO_DRIVER_FLAG_LOOP);
+    CHECK(dl != NULL);
+    CHECK_EQ(coro_rt_driver_set_default(dl), CORO_OK);
+
+    coro_rt_t* rt = coro_rt_create(2); /* LOOP default: no worker threads */
+    CHECK(rt != NULL);
+    g_rt = rt;
+
+    fake_driver fs;
+    coro_rt_driver_t* ds = fake_start("xclass-ebusy-signal", &fs, 0);
+    CHECK(ds != NULL);
+
+    coro_at_store((volatile uint64_t*)&g_completed, 0);
+    coro_at_store((volatile uint64_t*)&g_done, 0);
+    CHECK_EQ(coro_rt_spawn(rt, NULL, busy_coro, NULL), CORO_OK);
+
+    pt_thread_t th;
+    CHECK_EQ(pt_thread_create(&th, pump_thread_fn, rt), 0);
+    CHECK(fake_wait_flag(&g_completed, 2000)); /* the pump is inside rt_run_some */
+
+    /* A running pump owns worker[0]; both directions are refused and the
+       attached driver is unchanged. */
+    CHECK_EQ(coro_rt_attach_driver(rt, ds), CORO_EBUSY);
+    CHECK_EQ(coro_rt_detach_driver(rt), CORO_EBUSY);
+    CHECK(coro_rt_attached_driver(rt) == dl);
+
+    coro_at_store((volatile uint64_t*)&g_done, 1); /* let the pump finish */
+    pt_thread_join(th);
+
+    /* Pump idle again: the switch succeeds and starts the worker threads this
+       LOOP-created runtime never had. */
+    CHECK_EQ(coro_rt_attach_driver(rt, ds), CORO_OK);
+    CHECK(coro_rt_attached_driver(rt) == ds);
+    coro_rt_wait_all(rt);
+    CHECK_EQ(coro_rt_destroy(rt), CORO_OK);
+
+    CHECK_EQ(coro_rt_driver_set_default(NULL), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(dl), CORO_OK);
+    CHECK_EQ(coro_rt_driver_unregister(ds), CORO_OK);
+    fake_stop(&fl);
+    fake_stop(&fs);
+}
+
 static void run_tests(void) {
     test_attach_running();
     test_attach_then_detach();
     test_stress();
     test_cancel_after_attach();
-    test_loop_attach_ebusy();
+    test_loop_attach_live();
     test_attached_query();
     test_attach_right_after_create();
     test_pump_loop();
     test_pump_signal_ebusy();
+    test_crossclass_signal_to_loop();
+    test_crossclass_loop_to_signal();
+    test_crossclass_bounce();
+    test_crossclass_pump_ebusy();
 }
 
 TEST_MAIN()

@@ -162,12 +162,22 @@ struct coro_rt {
        against a worker arming its own alarm, and guards the workers' alarm_*
        fields. drv_gen is bumped on every switch (an alarm armed under an older
        generation is stale, so the worker re-arms on the new one). A same-family
-       switch migrates alarms in place and never parks a worker; the cross-class
-       worker-quiesce barrier returns with B4. pump_active is a re-entrancy guard
-       for coro_rt_pump. */
+       switch migrates alarms in place and never parks a worker. A cross-class
+       switch (LOOP vs. worker mode) quiesces every worker on the barrier below:
+       drv_barrier parks them at the top of the loop and drv_parked counts them,
+       drv_started counts the workers that are inside the loop (the start
+       handshake the quiesce wait keys on), and drv_threads records whether the
+       worker threads were ever created (a LOOP-created runtime starts them only
+       when it switches back to a threaded family). pump_active is a re-entrancy
+       guard for coro_rt_pump. All the counters are atomic; drv_threads is only
+       written under drv_lock. */
     coro_plat_mutex_t drv_lock;
     unsigned          drv_kind;
     uint64_t          drv_gen;
+    uint64_t          drv_barrier;   /**< atomic: 1 = workers hold at the barrier. */
+    uint64_t          drv_parked;    /**< atomic: workers parked at the barrier. */
+    uint64_t          drv_started;   /**< atomic: workers inside their loop. */
+    uint64_t          drv_threads;   /**< atomic: worker threads were created. */
     uint64_t          pump_active;   /**< atomic: a pump is inside rt_run_some. */
 };
 
@@ -187,5 +197,30 @@ struct coro_rt {
  * its one-node-per-turn shape; coro_rt_pump calls it with the host's budget.
  */
 size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget);
+
+/**
+ * rt_loop_sweep -- collect and drain every worker but the pump's own.
+ *
+ * In LOOP mode the host calls coro_rt_pump, which drives worker[0] by hand
+ * while the other worker threads hold at the barrier. Their timer heaps and
+ * inboxes still carry work from before the switch, so the pump first moves
+ * every expired deadline and pending inbox entry of workers[1..] onto their own
+ * run queues; rt_run_some then steals them for worker[0]. Safe only when the
+ * owning workers are parked (which the LOOP barrier guarantees), because the
+ * sweep acts as the owner.
+ */
+void rt_loop_sweep(coro_rt_t* rt);
+
+/**
+ * rt_start_workers -- create the worker threads.
+ *
+ * Allocated worker slots are started via worker_main. Returns 1 when every
+ * worker started, 0 when a thread could not be created (the ones already
+ * started are stopped and joined, and their stop flag is reset so a later
+ * retry starts cleanly). On success drv_threads is set. Used by coro_rt_create
+ * and by a LOOP-to-threaded driver switch on a runtime whose workers were never
+ * started.
+ */
+int rt_start_workers(coro_rt_t* rt);
 
 #endif /* COROCC_SCHEDULER_RT_H */

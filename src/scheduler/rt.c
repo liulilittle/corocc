@@ -436,6 +436,18 @@ size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
     return done;
 }
 
+/* LOOP pump helper: collect the expired deadlines and drain the inbox of every
+   worker but worker[0]. The host drives worker[0] through coro_rt_pump while the
+   peer workers hold at the barrier, so the pump thread may act as their owner
+   for this one pass; rt_run_some then steals the routed entries for worker[0].
+   Worker 0's own heap and inbox are handled inside its rt_run_some call. */
+void rt_loop_sweep(coro_rt_t* rt) {
+    for (size_t i = 1; i < rt->nworkers; ++i) {
+        collect_expired(&rt->workers[i]);
+        drain_inbox(&rt->workers[i]);
+    }
+}
+
 /* Put a worker to sleep until work appears or its nearest deadline passes.
    With a driver that arms alarms the deadline is handed to the driver and the
    worker waits on the activity condition without a timeout (the driver's alarm
@@ -492,7 +504,12 @@ static void worker_sleep(coro_rt_t* rt, rt_worker* w, uint64_t deadline) {
 
     coro_plat_mutex_lock(&rt->act_lock);
     if (!coro_at_load((volatile uint64_t*)&w->stop) &&
-        wsdeque_empty(&w->queue) && mpsc_empty(&w->inbox)
+        wsdeque_empty(&w->queue) && mpsc_empty(&w->inbox) &&
+        /* A raised barrier must not be slept through: without this the worker
+           could evaluate the condition just before the switch broadcasts and
+           then miss it, leaving it asleep while the runtime waits for it to
+           park. Returning here lets worker_main observe the barrier. */
+        !coro_at_load((volatile uint64_t*)&rt->drv_barrier)
 #if COROCC_RT_DRIVER
         && coro_at_load((volatile uint64_t*)&rt->drv_gen) == gen
         && !(deadline != 0 && rt_now(rt) >= deadline)
@@ -514,8 +531,35 @@ static void worker_main(void* pv) {
     rt_worker* w = (rt_worker*)pv;
     coro_rt_t* rt = w->rt;
 
+    /* Start handshake: the cross-class quiesce wait keys on drv_started so a
+       worker the OS has not scheduled yet cannot look like a worker that
+       refused to park. Paired with the decrement on the way out. */
+    coro_plat_mutex_lock(&rt->act_lock);
+    (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_started, 1);
+    coro_plat_cond_broadcast(&rt->act_cond);
+    coro_plat_mutex_unlock(&rt->act_lock);
+
     for (;;) {
         if (coro_at_load((volatile uint64_t*)&w->stop)) break;
+
+        /* A cross-class driver switch (or the whole LOOP phase) parks every
+           worker here while it migrates the runtime between execution models.
+           The worker stays off the run queue and out of the timer heap until
+           the switch clears the barrier; in LOOP it stays parked for as long as
+           the host pumps worker[0] by hand. */
+        if (coro_at_load((volatile uint64_t*)&rt->drv_barrier)) {
+            coro_plat_mutex_lock(&rt->act_lock);
+            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked, 1);
+            coro_plat_cond_broadcast(&rt->act_cond);
+            while (coro_at_load((volatile uint64_t*)&rt->drv_barrier) &&
+                   !coro_at_load((volatile uint64_t*)&w->stop)) {
+                (void)coro_plat_cond_wait(&rt->act_cond, &rt->act_lock);
+            }
+            (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_parked,
+                                    (uint64_t)-1);
+            coro_plat_mutex_unlock(&rt->act_lock);
+            continue;
+        }
 
         /* One node per turn keeps the hot path's shape; the budget form is for
            the host-driven pump. */
@@ -528,12 +572,41 @@ static void worker_main(void* pv) {
         if (t) deadline = t->deadline;
         worker_sleep(rt, w, deadline);
     }
+
+    coro_plat_mutex_lock(&rt->act_lock);
+    (void)coro_at_fetch_add((volatile uint64_t*)&rt->drv_started, (uint64_t)-1);
+    coro_plat_mutex_unlock(&rt->act_lock);
 }
 
 /* ---- public API ---- */
 
 static void w_stop(rt_worker* w) {
     coro_at_store((volatile uint64_t*)&w->stop, 1);
+}
+
+int rt_start_workers(coro_rt_t* rt) {
+    size_t started = 0;
+    for (; started < rt->nworkers; ++started) {
+        if (coro_thread_create(&rt->workers[started].thread, worker_main,
+                               &rt->workers[started]) != 0) {
+            break;
+        }
+    }
+    if (started != rt->nworkers) {
+        /* Roll the partial start back so a caller that retries starts clean:
+           stop and join what did start, then clear the stop flags. A started
+           thread that reached worker_main also decremented drv_started as it
+           left, so the handshake counter returns to rest. */
+        for (size_t j = 0; j < started; ++j) w_stop(&rt->workers[j]);
+        signal_activity(rt);
+        for (size_t j = 0; j < started; ++j) {
+            coro_thread_join(rt->workers[j].thread);
+            coro_at_store((volatile uint64_t*)&rt->workers[j].stop, 0);
+        }
+        return 0;
+    }
+    coro_at_store((volatile uint64_t*)&rt->drv_threads, 1);
+    return 1;
 }
 
 coro_rt_t* coro_rt_create(size_t nthreads) {
@@ -598,18 +671,8 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
     }
     if (kind == RT_DRV_LOOP) return rt; /* host-driven; no worker threads */
 
-    size_t started = 0;
-    for (; started < nworkers; ++started) {
-        if (coro_thread_create(&rt->workers[started].thread, worker_main,
-                               &rt->workers[started]) != 0) {
-            break;
-        }
-    }
-    if (started != nworkers) {
-        for (size_t j = 0; j < started; ++j) w_stop(&rt->workers[j]);
-        signal_activity(rt);
-        for (size_t j = 0; j < started; ++j) {
-            coro_thread_join(rt->workers[j].thread);
+    if (!rt_start_workers(rt)) {
+        for (size_t j = 0; j < nworkers; ++j) {
             coro_timer_heap_destroy(&rt->workers[j].sleepers);
         }
 #if !defined(_WIN32)
@@ -909,8 +972,14 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
     if (!rt) return CORO_OK;
     if (coro_at_load((volatile uint64_t*)&rt->live) > 0) return CORO_EBUSY;
 
-    if (rt->drv_kind != RT_DRV_LOOP) {
+    /* Stop and join the worker threads whenever they were created -- even when
+       the runtime is currently in LOOP, where the workers are parked on the
+       barrier rather than absent. Clearing the barrier and broadcasting releases
+       a parked worker so it can observe its stop flag. A LOOP-created runtime
+       never started threads, so this is skipped. */
+    if (coro_at_load((volatile uint64_t*)&rt->drv_threads)) {
         for (size_t i = 0; i < rt->nworkers; ++i) w_stop(&rt->workers[i]);
+        coro_at_store((volatile uint64_t*)&rt->drv_barrier, 0);
         signal_activity(rt);
         for (size_t i = 0; i < rt->nworkers; ++i) {
             coro_thread_join(rt->workers[i].thread);
