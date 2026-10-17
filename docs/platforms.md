@@ -130,8 +130,9 @@ push and pull request:
 | `ndk` (2 jobs) | Android NDK compile+link for `arm64-v8a` and `x86_64`. |
 | `ci-summary` | Aggregates the jobs; a skipped job fails the summary unless explicitly whitelisted. |
 
-`perf-report` is an optional, non-gating job (manual or scheduled runs) that
-publishes the benchmark numbers.
+`perf-report` runs on every push and pull request (and on manual or scheduled
+runs). It is report-only (never gates) and publishes the benchmark numbers as
+the `perf-report` artifact.
 
 ## Known boundaries
 

@@ -18,6 +18,9 @@
 #                scripts/ci/stage-dist*.sh (normalization: the literal
 #                `${{ inputs.tag || github.ref_name }}` -> `<tag>`,
 #                `${{ matrix.triple }}` -> `<triple>`)
+#   * report:    the `  perf-report:` block, sliced from its job key to the
+#                next job-boundary line; must be non-gated (no per-event
+#                `if:`), non-fatal, and upload an `if: always()` artifact
 #
 # Exit: 0 all assertions pass; 1 otherwise.
 set -u
@@ -112,11 +115,25 @@ done < <(awk '/^[[:space:]]+report[[:space:]]/{print $2}' "$CI" | sort -u)
 grep -Fq 'ALLOW_SKIPPED' "$CI" || err "ci-summary skipped-whitelist (ALLOW_SKIPPED) missing"
 grep -Fq 'skipped)' "$CI" || err "ci-summary skipped handling missing"
 
-# report-only job shape
-grep -A6 -E "^  $REPORT_ONLY:" "$CI" | grep -q 'continue-on-error: true' \
+# report-only job shape: always runs, non-gating, with an always() upload.
+# The job block runs from its `  <job>:` line to the next job-boundary line.
+job_block() { # <file> <job>
+    awk -v job="$2" '
+        $0 ~ "^  " job ":[[:space:]]*$" {f=1; print; next}
+        f && $0 ~ "^  [A-Za-z0-9_-]+:[[:space:]]*$" {exit}
+        f {print}' "$1"
+}
+PERF_BLOCK="$(job_block "$CI" "$REPORT_ONLY")"
+[ -n "$PERF_BLOCK" ] || err "$REPORT_ONLY job block not found (contract drift?)"
+printf '%s\n' "$PERF_BLOCK" | grep -q 'continue-on-error: true' \
     || err "$REPORT_ONLY must carry continue-on-error: true"
-grep -A2 -E "^  $REPORT_ONLY:" "$CI" | grep -q "workflow_dispatch" \
-    || err "$REPORT_ONLY must be limited to workflow_dispatch/schedule"
+# must NOT be gated per-event (runs on every push/PR/dispatch/schedule)
+printf '%s\n' "$PERF_BLOCK" | grep -qE '^[[:space:]]+if:[[:space:]]*github\.event_name' \
+    && err "$REPORT_ONLY must NOT be gated on github.event_name (must run on every event)"
+printf '%s\n' "$PERF_BLOCK" | grep -q 'uses: actions/upload-artifact' \
+    || err "$REPORT_ONLY must upload its logs as an artifact"
+printf '%s\n' "$PERF_BLOCK" | grep -q 'if: always()' \
+    || err "$REPORT_ONLY artifact upload must carry 'if: always()'"
 
 # ---- (2) matrix same-source ------------------------------------------------
 mapfile -t CI_ABIS < <(extract_abis "$CI" cross)

@@ -328,9 +328,9 @@ jobs:
             -DANDROID_ABI=${{ matrix.android_abi }}
           cmake --build build-ndk -j2
 
-  # Optional, report-only: never a required check.
+  # Report-only: never a required check; runs on every push/PR and on
+  # manual/scheduled runs too.
   perf-report:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     continue-on-error: true
@@ -348,7 +348,26 @@ jobs:
             ./build-perf/tests/bench_switch_pure
             ./build-perf/tests/bench_rt_mn ; } 2>&1 | tee ci-logs/perf/bench-c.log
           ./build-perf/tests/bench_cpp_switch 2>&1 | tee ci-logs/perf/bench-cpp-strict.log
+      - name: summary (report-only; surfaced on the run page)
+        run: |
+          {
+            echo "# perf-report"
+            echo
+            for f in ci-logs/perf/*.log; do
+              [ -e "$f" ] || continue
+              echo "## $(basename "$f")"
+              echo '```'
+              head -n 20 "$f" || true
+              echo '```'
+              echo '### key lines'
+              echo '```'
+              grep -E 'ns/(coro|rt|ctx|round-trip|switch)|median|MEDIAN|round-trips/s|switches/s|PASSED|GATE FAIL|ratio' "$f" || true
+              echo '```'
+            done
+          } > ci-logs/perf/summary.md
+          cat ci-logs/perf/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: always()
         with: { name: perf-report, path: ci-logs/perf/, if-no-files-found: ignore }
 
   ci-summary:
