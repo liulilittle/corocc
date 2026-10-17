@@ -12,7 +12,7 @@ cross compiler and the QEMU user-mode emulator for that ISA.
 | `ci/build-test.sh` | Single-site driver shared with the GitHub Actions CI: configure, static build, qemu ctest and the registered/executed population-floor assertion (`--matrix-env`, see below). |
 | `prebuild-all.sh` | Builds the supported variants and stages `dist/<triple>/{lib,include}` for drop-in consumption. |
 | `ci-local.sh` | Local mirror of the CI pipeline: workflow YAML parse/lint, shellcheck, header conformance, native + cross sites, optional toolchain-asset rehearsal and a release-publish smoke test. |
-| `ci/fetch-toolchain-assets.sh` | Fetches, sha256-verifies and unpacks the prebuilt toolchain + sysroot assets for the big-endian and riscv32 targets. |
+| `ci/fetch-toolchain-assets.sh` | Fetches, sha256-verifies and unpacks the prebuilt single-tree toolchain assets for the big-endian and riscv32 targets. |
 
 ## Usage
 
@@ -72,11 +72,11 @@ extra suites such as Boost coexistence still passes.
 | File | Target triple | QEMU runner |
 | --- | --- | --- |
 | `aarch64.cmake` | `aarch64-linux-gnu` | `qemu-aarch64` (canonical file: `toolchain/aarch64-linux-gnu.cmake`) |
-| `aarch64_be.cmake` | `aarch64_be-linux-gnu` (prebuilt toolchain + sysroot assets) | `qemu-aarch64_be` |
+| `aarch64_be.cmake` | `aarch64_be-linux-gnu` (prebuilt single-tree toolchain asset) | `qemu-aarch64_be` |
 | `i386.cmake` | host `gcc`/`g++` with `-m32` | `qemu-i386` |
 | `arm32.cmake` | `arm-linux-gnueabihf` | `qemu-arm` |
 | `armel.cmake` | `arm-linux-gnueabi` (soft-float EABI, `-gcc-13`) | `qemu-arm` |
-| `armeb.cmake` | `armeb-linux-gnueabi` (prebuilt toolchain + sysroot assets) | `qemu-armeb` |
+| `armeb.cmake` | `armeb-linux-gnueabi` (prebuilt single-tree toolchain asset) | `qemu-armeb` |
 | `mips32.cmake` | `mips-linux-gnu` | `qemu-mips` |
 | `mips32el.cmake` | `mipsel-linux-gnu` | `qemu-mipsel` |
 | `mips64.cmake` | `mips64-linux-gnuabi64` (`-gcc-13`) | `qemu-mips64` |
@@ -88,15 +88,15 @@ extra suites such as Boost coexistence still passes.
 | `ppc64le.cmake` | `powerpc64le-linux-gnu` | `qemu-ppc64le` |
 | `s390x.cmake` | `s390x-linux-gnu` | `qemu-s390x` |
 | `riscv64.cmake` | `riscv64-linux-gnu` | `qemu-riscv64` |
-| `riscv32.cmake` | `riscv32-linux-gnu` (prebuilt toolchain + sysroot assets) | `qemu-riscv32` |
+| `riscv32.cmake` | `riscv32-linux-gnu` (prebuilt single-tree toolchain asset) | `qemu-riscv32` |
 | `loongarch64.cmake` | `loongarch64-linux-gnu` (`-gcc-13`) | `qemu-loongarch64` |
 | `sparc64.cmake` | `sparc64-linux-gnu` (`-gcc-13`) | `qemu-sparc64` |
 | `android-ndk.cmake` | NDK r26+, `ANDROID_ABI` | on device / emulator |
 
 The prebuilt-asset rows (aarch64_be, armeb, riscv32) are installed by
-`scripts/ci/fetch-toolchain-assets.sh`, which downloads the asset archives,
-verifies them against `ci/toolchain-assets.sha256` and unpacks them under
-`/opt` (`corocc-toolchain/`, `corocc-sysroot/`).
+`scripts/ci/fetch-toolchain-assets.sh`, which downloads one self-contained
+archive per triple, verifies it against `ci/toolchain-assets.sha256` and
+unpacks it under `/opt` (`corocc-toolchain/<triple>/{bin,...,sysroot/}`).
 
 ## Backend notes
 

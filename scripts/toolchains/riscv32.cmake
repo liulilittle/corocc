@@ -9,7 +9,7 @@
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR riscv32)
 set(COROCC_ABI riscv32)                      # authoritative backend selector
-if (NOT EXISTS "/opt/corocc-sysroot/riscv32-linux-gnu/usr/include/stdio.h")
+if (NOT EXISTS "/opt/corocc-toolchain/riscv32-linux-gnu/sysroot/usr/include/stdio.h")
     message(FATAL_ERROR
         "corocc: riscv32 toolchain is not built yet; fetch the prebuilt asset "
         "with scripts/ci/fetch-toolchain-assets.sh riscv32-linux-gnu "
@@ -17,7 +17,7 @@ if (NOT EXISTS "/opt/corocc-sysroot/riscv32-linux-gnu/usr/include/stdio.h")
 endif()
 set(CMAKE_C_COMPILER /opt/corocc-toolchain/riscv32-linux-gnu/bin/riscv32-linux-gnu-gcc)
 set(CMAKE_CXX_COMPILER /opt/corocc-toolchain/riscv32-linux-gnu/bin/riscv32-linux-gnu-g++)
-set(CMAKE_SYSROOT /opt/corocc-sysroot/riscv32-linux-gnu)
+set(CMAKE_SYSROOT /opt/corocc-toolchain/riscv32-linux-gnu/sysroot)
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-static")
-set(CMAKE_FIND_ROOT_PATH /opt/corocc-sysroot/riscv32-linux-gnu)
+set(CMAKE_FIND_ROOT_PATH /opt/corocc-toolchain/riscv32-linux-gnu/sysroot)
 set(CMAKE_CROSSCOMPILING_EMULATOR qemu-riscv32)

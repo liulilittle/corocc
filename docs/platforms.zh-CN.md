@@ -64,10 +64,12 @@
 | `sparc64-unknown-linux-gnu` | sparc64 BE(V9) | LP64 | `qemu-sparc64` | 是(另附全量套件;vendored 后端,Boost 1.92.0) |
 
 "预构建工具链"行使用由 `scripts/ci/fetch-toolchain-assets.sh` 拉取并做
-sha256 校验的工具链/sysroot 资产(CI 与本机同一流程)。资产对 binutils **并非自足**:
-多数 `<triple>-{ld,ar,nm,...}` 为指向宿主 `/usr/bin` 交叉 binutils 的绝对软链,
-`armeb` 的 `as` 为 `exec /usr/bin/arm-linux-gnueabi-as -EB` 的薄包装,
-故这些行保留 apt binutils 包。全站来源表见
+sha256 校验的**单树**工具链资产(CI 与本机同一流程):每个 triple 一个 tarball,
+顶层为 `corocc-toolchain/<triple>/{bin,...,sysroot/}`,解包到 `/opt`。该资产的
+"自足"仅指:`bin/<triple>-gcc` 携带自带 binutils,树内无指向树外的软链,
+`-print-sysroot` 可重定位——即**消除原指向 `/usr/bin` 的绝对软链与对宿主交叉
+编译器身份的依赖**;它**并未消除**对宿主 C 运行时的依赖:捆库后仍依赖宿主
+glibc / `ld-linux`(故这些行保留 apt 运行时包)。全站来源表见
 [toolchains.zh-CN.md](toolchains.zh-CN.md)。"本机探针"表示在本次
 文档验证中还把 ABI 布局探针编译运行于该工具链之上;"另附全量套件"表示完整
 CTest 套件也在本机经 `qemu-user` 跑过。32 位各行的 "ILP32" 默认指 `uint64_t`

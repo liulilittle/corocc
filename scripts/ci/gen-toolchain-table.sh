@@ -191,7 +191,14 @@ for site in "${ENV_SITES[@]}"; do
     if [ -n "$assets" ]; then
         localIFS="$IFS"; IFS=';'
         for a in $assets; do
-            [ -n "${ASSET_SHA[$a]:-}" ] || err "env[$site]: asset '$a' not found in $LEDGER"
+            case "$a" in
+                *'<'*|*'>'*) err "env[$site]: asset name carries a template token: '$a'" ;;
+            esac
+            sha="${ASSET_SHA[$a]:-}"
+            [ -n "$sha" ] || err "env[$site]: asset '$a' not found in $LEDGER"
+            case "$sha" in
+                *'<'*|*'>'*) err "env[$site]: ledger sha for '$a' carries a template token: '$sha'" ;;
+            esac
         done
         IFS="$localIFS"
     fi
@@ -221,7 +228,7 @@ source_label() { # <kind> <detail> <apt>  -> localized label (stdout)
         case "$kind" in
             apt)          printf 'apt 交叉包:%s' "$apt" ;;
             host-m32)     printf '宿主 gcc/g++ -m32(apt:%s)' "$apt" ;;
-            prebuilt-v1)  printf '预编译 toolchain-v1 资产(gcc 13.3.0 + glibc 2.39)+ apt binutils:%s' "$apt" ;;
+            prebuilt-v1)  printf '预编译单树工具链资产(gcc/binutils/glibc 版本见资产名;Ubuntu 24.04)+ apt 运行时包:%s' "$apt" ;;
             runner-image) printf 'runner 镜像工具链(Ubuntu 24.04;GCC 13 / Clang 18)'; [ -n "$extra" ] && printf ' + apt:%s' "$extra" ;;
             xcode)        printf 'Xcode clang(macOS runner 镜像)' ;;
             vs2022)       printf 'Visual Studio 2022(MSVC x64 / Win32)' ;;
@@ -232,7 +239,7 @@ source_label() { # <kind> <detail> <apt>  -> localized label (stdout)
         case "$kind" in
             apt)          printf 'apt cross packages: %s' "$apt" ;;
             host-m32)     printf 'host gcc/g++ -m32 (apt: %s)' "$apt" ;;
-            prebuilt-v1)  printf 'prebuilt toolchain-v1 assets (gcc 13.3.0 + glibc 2.39) + apt binutils: %s' "$apt" ;;
+            prebuilt-v1)  printf 'prebuilt single-tree toolchain asset (gcc/binutils/glibc versions carried in the asset name; Ubuntu 24.04) + apt runtime packages: %s' "$apt" ;;
             runner-image) printf 'runner image toolchain (Ubuntu 24.04; GCC 13 / Clang 18)'; [ -n "$extra" ] && printf ' + apt: %s' "$extra" ;;
             xcode)        printf 'Xcode clang (macOS runner image)' ;;
             vs2022)       printf 'Visual Studio 2022 (MSVC x64 / Win32)' ;;
@@ -330,9 +337,9 @@ emit_ledger() { # the toolchain-v1 asset ledger (names referenced by the env)
     done
     names="$(printf '%s' "$names" | sort -u)"
     if [ "$LANG_SEL" = zh ]; then
-        printf '## toolchain-v1 资产台账(tag: `toolchain-v1`)\n\n'
+        printf '## 预编译工具链资产台账(tag: `toolchain-v1`)\n\n'
     else
-        printf '## toolchain-v1 asset ledger (tag: `toolchain-v1`)\n\n'
+        printf '## prebuilt toolchain asset ledger (tag: `toolchain-v1`)\n\n'
     fi
     while IFS= read -r a; do
         [ -n "$a" ] || continue
@@ -386,11 +393,13 @@ else
     if [ "$LANG_SEL" = zh ]; then
         {
             printf '## 工具链来源 —— 交叉站(全 20 站)与 sha256 校验的预编译资产\n\n'
-            printf '每个交叉站点的编译器/sysroot 来自 apt 交叉包,或本 release 内经 sha256 校验的\n'
-            printf '预编译 `toolchain-v1` 资产(解包到 `/opt`,由 `scripts/ci/fetch-toolchain-assets.sh`\n'
-            printf '消费,台账 `ci/toolchain-assets.sha256`)。`toolchain-v1` 资产不携带自足 binutils:\n'
-            printf '多数 `<host-prefix>-{ld,ar,nm,...}` 为指向 `/usr/bin` 的绝对软链,`armeb` 的 `as` 为\n'
-            printf '`exec /usr/bin/arm-linux-gnueabi-as -EB` 的薄包装,故这些行仍保留 apt binutils 包。\n'
+            printf '每个交叉站点的编译器/sysroot 来自 apt 交叉包,或经 sha256 校验的预编译单树资产\n'
+            printf '(每个 triple 一个 tarball,顶层 `corocc-toolchain/<triple>/{bin,...,sysroot/}`,\n'
+            printf '解包到 `/opt`,由 `scripts/ci/fetch-toolchain-assets.sh` 消费,台账\n'
+            printf '`ci/toolchain-assets.sha256`)。该资产为自足单树:`bin/<triple>-gcc` 携带自带\n'
+            printf 'binutils,树内无指向树外的软链,`-print-sysroot` 可重定位(断言前两侧路径规范化)。其"自足"仅指\n'
+            printf '**消除对宿主 `/usr/bin` 绝对软链与交叉编译器身份(/usr 交叉包)的依赖**;\n'
+            printf '捆库后仍依赖宿主 glibc / `ld-linux`,故这些行保留 apt 运行时包。\n'
             printf '下载基址可用环境变量 `COROCC_ASSET_BASE_URL` 覆盖(默认本 tag 的\n'
             printf '`.../releases/download/toolchain-v1`)。完整、随时更新的表见 `docs/toolchains.md`。\n\n'
             emit_table cross
@@ -401,15 +410,18 @@ else
         {
             printf '## Toolchain sources — every cross site (20) and the sha256-verified prebuilt assets\n\n'
             printf 'Each cross site gets its compiler/sysroot from apt cross packages, or from the\n'
-            printf 'sha256-verified prebuilt `toolchain-v1` assets carried by this release (unpacked under\n'
+            printf 'sha256-verified prebuilt single-tree assets carried by this release (one archive\n'
+            printf 'per triple, top level `corocc-toolchain/<triple>/{bin,...,sysroot/}`, unpacked under\n'
             printf '`/opt`, consumed by `scripts/ci/fetch-toolchain-assets.sh`, ledger\n'
-            printf '`ci/toolchain-assets.sha256`). The `toolchain-v1` assets do not carry\n'
-            printf 'self-contained binutils: most `<host-prefix>-{ld,ar,nm,...}` entries are absolute\n'
-            printf 'symlinks into `/usr/bin`, and `armeb`'"'"'s `as` is a thin\n'
-            printf '`exec /usr/bin/arm-linux-gnueabi-as -EB` wrapper, so those rows keep the apt\n'
-            printf 'binutils packages. The download base can be overridden with `COROCC_ASSET_BASE_URL`\n'
-            printf '(default: this tag, `.../releases/download/toolchain-v1`). The canonical,\n'
-            printf 'always-up-to-date table lives in `docs/toolchains.md`.\n\n'
+            printf '`ci/toolchain-assets.sha256`). Each archive is a self-contained tree: `bin/<triple>-gcc`\n'
+            printf 'carries its own binutils, no symlink escapes the tree, and `-print-sysroot` is\n'
+            printf 'relocatable (both sides path-normalized before the check). Self-containment means only\n'
+            printf 'that the **absolute `/usr/bin` symlinks and\n'
+            printf 'the cross-compiler identity (the /usr cross packages) are eliminated**; with the\n'
+            printf 'bundled libraries the asset still relies on the host glibc / `ld-linux`, so those\n'
+            printf 'rows keep the apt runtime packages. The download base can be overridden with\n'
+            printf '`COROCC_ASSET_BASE_URL` (default: this tag, `.../releases/download/toolchain-v1`).\n'
+            printf 'The canonical, always-up-to-date table lives in `docs/toolchains.md`.\n\n'
             emit_table cross
             printf '\n'
             emit_ledger

@@ -64,5 +64,35 @@ backends, with the N32 specifics calibrated against the toolchain ABIs
 (8-byte general-register slots, the even f20-f30 FP set, and the
 single-register `coro_transfer` packing).
 
+## Prebuilt toolchain assets (`toolchain-v1` release)
+
+The assets published under the repository's `toolchain-v1` release are consumed
+by the CI cross sites (`cross-aarch64_be`, `cross-armeb`, `cross-riscv32`) and
+are fetched and sha256-verified by `scripts/ci/fetch-toolchain-assets.sh`. Each
+asset is one self-contained tree (`corocc-toolchain/<triple>/`); nothing beyond
+the host **glibc (`libc.so.6`/`libm`) and `ld-linux`** is required, because the
+binutils and GCC runtime libraries are bundled under the tree's `lib/`
+(resolved through `$ORIGIN`-relative RPATH). Every tree carries the license
+texts and a `SOURCES.txt` provenance file (package, version, upstream URL and
+upstream tarball sha256) under `share/licenses/`.
+
+| Component | License | Upstream |
+| --- | --- | --- |
+| binutils 2.42 (incl. libbfd, libopcodes, libctf, libctf-nobfd, libsframe) | GPL-3.0-or-later / LGPL-3.0-or-later | <https://ftp.gnu.org/gnu/binutils/> |
+| GCC 13.3.0 | GPL-3.0-or-later WITH GCC-exception-3.1 | <https://ftp.gnu.org/gnu/gcc/> |
+| glibc 2.39 | LGPL-2.1-or-later | <https://ftp.gnu.org/gnu/glibc/> |
+| libgmp | GPL-2.0-or-later OR LGPL-3.0-or-later | <https://gmplib.org/> |
+| libmpfr | LGPL-3.0-or-later | <https://www.mpfr.org/> |
+| libmpc | LGPL-3.0-or-later | <https://www.multiprecision.org/mpc/> |
+| libisl | MIT | <https://isl.gforge.inria.fr/> |
+| libjansson | Expat | <https://github.com/akheron/jansson> |
+| libz | Zlib | <https://zlib.net/> |
+| libzstd | BSD-3-Clause OR GPL-2.0 | <https://github.com/facebook/zstd> |
+
+**Corresponding source (GPLv3 section 6(d), same-place availability):** the
+corresponding source of every component above is available from the upstream
+locations listed; each archive additionally records the exact upstream tarball
+URLs and their sha256 in `share/licenses/SOURCES.txt`.
+
 The `corocc` project itself is licensed under the MIT License; see `LICENSE`
 at the repository root.

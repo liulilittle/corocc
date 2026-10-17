@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Fetch + verify + unpack prebuilt toolchain assets (used by the asset rows
-# of the CI and release workflows; see docs/platforms.md).
+# Fetch + verify + unpack the prebuilt toolchain assets (used by the asset
+# rows of the CI and release workflows; see docs/platforms.md).
+#
+# Contract (single self-contained tree per triple):
+#   asset name : corocc-toolchain-<triple>-gcc<gccver>-binutils<binutilsver>-glibc<glibcver>-ubuntu24.04.tar.gz
+#   tar top    : corocc-toolchain/<triple>/{bin,lib,libexec,...,sysroot/}
+#   gcc        : corocc-toolchain/<triple>/bin/<triple>-gcc
+#   sysroot    : corocc-toolchain/<triple>/sysroot   (-print-sysroot, relocatable)
 #
 # Usage: scripts/ci/fetch-toolchain-assets.sh <triple> [<triple>...]
 #
@@ -14,20 +20,32 @@
 #   COROCC_ASSET_CURL      curl binary (default: curl)
 #   COROCC_ASSET_WORK_DIR  download/work dir (default: mktemp -d)
 #
-# Per asset, in order (any failure exits 1):
-#   1. the ledger must exist, be non-empty and carry >=1 line for the triple
-#      (an empty ledger must never fail open);
+# Per triple, in order (any failure exits 1 -- the flow is fail-closed and
+# never fails open on a missing/empty/stale ledger):
+#   1. the ledger must exist, be non-empty and carry >=1 line for the triple;
+#      each matched line's digest must be a 64-hex sha256 (a placeholder or
+#      otherwise unfilled line is rejected here);
 #   2. download <base>/<name>;
 #   3. `sha256sum -c --strict` against exactly the ledger lines for the triple;
-#   4. tar top-level assertion: every member starts with corocc-toolchain/ or
-#      corocc-sysroot/, no absolute paths and no ../; sysroot assets must carry
-#      corocc-sysroot/<triple>/usr/include/stdio.h; full-chain assets must
-#      carry corocc-toolchain/<triple>/bin/;
+#   4. tar member assertions: every member starts with corocc-toolchain/, no
+#      absolute paths and no ../ ; the archive must carry
+#      corocc-toolchain/<triple>/bin/<triple>-gcc and
+#      corocc-toolchain/<triple>/sysroot/usr/include/stdio.h;
 #   5. unpack: <sudo> tar -C "$COROCC_ASSET_OPT_DIR" -xzf <asset>;
-#   6. post-unpack assertions: sysroot stdio.h present; for full-chain assets
-#      the packed gcc's `-print-sysroot` must equal the unpacked sysroot path
-#      (strict when COROCC_ASSET_OPT_DIR=/opt, noted otherwise for scratch
-#      rehearsals); sysroot-only assets skip the -print-sysroot probe.
+#   6. post-unpack assertions: the gcc is executable, the sysroot stdio.h is
+#      present, and the packed gcc's `-print-sysroot` equals the unpacked
+#      sysroot path (strict when COROCC_ASSET_OPT_DIR=/opt, noted otherwise
+#      for scratch rehearsals). Both sides are path-normalized before the
+#      comparison (symlinks resolved, `x/..` and `//` collapsed), so a
+#      symlinked /opt or a `<prefix>/.../bin/../sysroot` spelling still
+#      compares equal; a genuinely different path is still FETCH FAIL;
+#   7. symlink audit: no symlink inside corocc-toolchain/<triple>/ may resolve
+#      outside that tree (a self-contained relocatable tree carries no
+#      /usr/bin or other out-of-tree links).
+#
+# The legacy two-tree family (separate corocc-sysroot-* and corocc-toolchain-*
+# tarballs) is retired by the asset-layout ruling: only the single
+# self-contained tree above is handled.
 set -u
 set -o pipefail
 
@@ -56,6 +74,7 @@ case "${COROCC_ASSET_SUDO:-auto}" in
 esac
 
 command -v "$CURL" >/dev/null 2>&1 || { echo "fetch-toolchain-assets: '$CURL' not found" >&2; exit 2; }
+command -v realpath >/dev/null 2>&1 || { echo "fetch-toolchain-assets: 'realpath' not found" >&2; exit 2; }
 
 if [ -z "$WORK_DIR" ]; then
     WORK_DIR="$(mktemp -d)"
@@ -63,6 +82,35 @@ else
     mkdir -p "$WORK_DIR"
 fi
 "${SUDO[@]}" mkdir -p "$OPT_DIR"
+
+# norm_path <path>: canonicalize for comparison -- resolve symlinks and collapse
+# `x/..`, `//` etc. Used on both sides of the -print-sysroot check so a
+# symlinked prefix or a `<prefix>/.../bin/../sysroot` spelling compares equal.
+norm_path() {
+    local p="$1"
+    [ -n "$p" ] || { printf '%s' ""; return 0; }
+    realpath -m -- "$p" 2>/dev/null || printf '%s' "$p"
+}
+
+# audit_symlinks <tree-root>: reject any symlink that resolves outside the tree.
+audit_symlinks() { # fail-closed: returns 1 if a symlink escapes the tree
+    local root="$1" abs link tgt res bad=0
+    [ -d "$root" ] || return 0
+    abs="$(cd "$root" && pwd -P)"
+    while IFS= read -r -d '' link; do
+        tgt="$(readlink "$link")"
+        case "$tgt" in
+            /*) res="$(realpath -m "$tgt")" ;;
+            *)  res="$(realpath -m "$(dirname "$link")/$tgt")" ;;
+        esac
+        case "$res" in
+            "$abs"|"$abs"/*) ;;
+            *) echo "FETCH FAIL: symlink escapes the asset tree: $link -> $tgt" >&2
+               bad=1 ;;
+        esac
+    done < <(find "$abs" -type l -print0)
+    [ "$bad" -eq 0 ]
+}
 
 for triple in "$@"; do
     echo "== asset fetch: $triple =="
@@ -72,7 +120,7 @@ for triple in "$@"; do
     fi
     mapfile -t LINES < <(awk -v t="$triple" '
         /^[[:space:]]*#/ { next }
-        NF == 2 && $2 ~ /^corocc-(toolchain|sysroot)-/ && index($2, "-" t "-") { print }' "$SHA_FILE")
+        NF == 2 && $2 ~ /^corocc-toolchain-/ && index($2, "-" t "-") { print }' "$SHA_FILE")
     if [ "${#LINES[@]}" -eq 0 ]; then
         echo "FETCH FAIL: no ledger entry for triple '$triple' in $SHA_FILE" >&2
         exit 1
@@ -82,6 +130,10 @@ for triple in "$@"; do
         sha="${line%% *}"
         name="${line##* }"
         file="$WORK_DIR/$name"
+        if ! printf '%s' "$sha" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "FETCH FAIL: ledger sha for $name is not a 64-hex digest (placeholder? fill it at packaging)" >&2
+            exit 1
+        fi
         echo "-- download $name"
         if ! "$CURL" -fL --retry 2 -o "$file" "$BASE_URL/$name"; then
             echo "FETCH FAIL: download failed: $BASE_URL/$name" >&2
@@ -102,26 +154,19 @@ for triple in "$@"; do
             grep -En '(^/)|(^|/)\.\.(/|$)' "$listing" | head -5 >&2
             exit 1
         fi
-        if grep -Ev '^(corocc-toolchain|corocc-sysroot)/' "$listing" | grep -q .; then
-            echo "FETCH FAIL: tar members outside corocc-toolchain/ and corocc-sysroot/: $name" >&2
-            grep -Ev '^(corocc-toolchain|corocc-sysroot)/' "$listing" | head -5 >&2
+        if grep -Ev '^corocc-toolchain/' "$listing" | grep -q .; then
+            echo "FETCH FAIL: tar members outside corocc-toolchain/: $name" >&2
+            grep -Ev '^corocc-toolchain/' "$listing" | head -5 >&2
             exit 1
         fi
-        case "$name" in
-            corocc-sysroot-*)
-                if ! grep -qx "corocc-sysroot/$triple/usr/include/stdio.h" "$listing"; then
-                    echo "FETCH FAIL: $name lacks corocc-sysroot/$triple/usr/include/stdio.h" >&2
-                    exit 1
-                fi ;;
-            corocc-toolchain-*)
-                if ! grep -qE "^corocc-toolchain/$triple/bin/" "$listing"; then
-                    echo "FETCH FAIL: $name lacks corocc-toolchain/$triple/bin/" >&2
-                    exit 1
-                fi ;;
-            *)
-                echo "FETCH FAIL: unsupported asset name '$name' (expected corocc-toolchain-*/corocc-sysroot-*)" >&2
-                exit 1 ;;
-        esac
+        if ! grep -qx "corocc-toolchain/$triple/bin/$triple-gcc" "$listing"; then
+            echo "FETCH FAIL: $name lacks corocc-toolchain/$triple/bin/$triple-gcc" >&2
+            exit 1
+        fi
+        if ! grep -qx "corocc-toolchain/$triple/sysroot/usr/include/stdio.h" "$listing"; then
+            echo "FETCH FAIL: $name lacks corocc-toolchain/$triple/sysroot/usr/include/stdio.h" >&2
+            exit 1
+        fi
 
         echo "-- unpack $name into $OPT_DIR"
         if ! "${SUDO[@]}" tar -C "$OPT_DIR" -xzf "$file"; then
@@ -129,28 +174,31 @@ for triple in "$@"; do
             exit 1
         fi
 
-        if [ ! -f "$OPT_DIR/corocc-sysroot/$triple/usr/include/stdio.h" ]; then
-            echo "FETCH FAIL: post-unpack sysroot header missing: $OPT_DIR/corocc-sysroot/$triple/usr/include/stdio.h" >&2
+        tree="$OPT_DIR/corocc-toolchain/$triple"
+        gcc="$tree/bin/$triple-gcc"
+        sysroot="$tree/sysroot"
+        if [ ! -x "$gcc" ]; then
+            echo "FETCH FAIL: post-unpack compiler missing or not executable: $gcc" >&2
             exit 1
         fi
-        case "$name" in
-            corocc-toolchain-*)
-                gcc="$OPT_DIR/corocc-toolchain/$triple/bin/$triple-gcc"
-                if [ ! -x "$gcc" ]; then
-                    echo "FETCH FAIL: post-unpack compiler missing: $gcc" >&2
-                    exit 1
-                fi
-                actual="$("$gcc" -print-sysroot 2>/dev/null || true)"
-                expected="$OPT_DIR/corocc-sysroot/$triple"
-                if [ "$OPT_DIR" = "/opt" ]; then
-                    if [ "$actual" != "$expected" ]; then
-                        echo "FETCH FAIL: $gcc -print-sysroot = '$actual', expected '$expected'" >&2
-                        exit 1
-                    fi
-                else
-                    echo "note: scratch opt dir in use; $gcc -print-sysroot = '$actual' (CI expects '$expected')"
-                fi ;;
-        esac
+        if [ ! -f "$sysroot/usr/include/stdio.h" ]; then
+            echo "FETCH FAIL: post-unpack sysroot header missing: $sysroot/usr/include/stdio.h" >&2
+            exit 1
+        fi
+        actual_raw="$("$gcc" -print-sysroot 2>/dev/null || true)"
+        actual="$(norm_path "$actual_raw")"
+        expected="$(norm_path "$sysroot")"
+        if [ "$OPT_DIR" = "/opt" ]; then
+            if [ "$actual" != "$expected" ]; then
+                echo "FETCH FAIL: $gcc -print-sysroot = '$actual_raw' (normalized '$actual'), expected '$sysroot' (normalized '$expected')" >&2
+                exit 1
+            fi
+        else
+            echo "note: scratch opt dir in use; $gcc -print-sysroot = '$actual_raw' (normalized '$actual'; CI expects '$sysroot' -> '$expected')"
+        fi
+        if ! audit_symlinks "$tree"; then
+            exit 1
+        fi
     done
     echo "== asset fetch OK: $triple =="
 done

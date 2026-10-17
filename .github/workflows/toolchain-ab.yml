@@ -1,0 +1,73 @@
+name: toolchain-ab
+# NON-GATING experiment (report-only). It compares, for the two asset sites,
+# the runner's apt cross toolchain (route A) with the sha256-verified prebuilt
+# asset toolchain (route B) and prints both toolchain identities, so the two
+# paths are provably distinct. It runs on workflow_dispatch and a schedule only
+# -- never on push/PR -- and is NOT part of ci-summary (ci/check-workflows.sh
+# reads only ci.yml/release.yml, so this file is invisible to the gate).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 4 * * 2"            # weekly, offset from ci.yml's Monday run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ab:
+    name: ab ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    continue-on-error: true         # report-only; never fails the branch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A = apt route (runner apt cross packages + their toolchain file);
+          # B = asset route (the single self-contained tree under /opt, wired
+          # by scripts/toolchains/<site>.cmake).
+          - { abi: aarch64_be, asset_triple: aarch64_be-linux-gnu, apt_cc: aarch64-linux-gnu-gcc, apt_tc: scripts/toolchains/aarch64.cmake, asset_tc: scripts/toolchains/aarch64_be.cmake, apt_pkgs: "gcc-aarch64-linux-gnu g++-aarch64-linux-gnu" }
+          - { abi: riscv32,    asset_triple: riscv32-linux-gnu,    apt_cc: riscv64-linux-gnu-gcc,  apt_tc: scripts/toolchains/riscv64.cmake, asset_tc: scripts/toolchains/riscv32.cmake,    apt_pkgs: "gcc-riscv64-linux-gnu g++-riscv64-linux-gnu" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cross toolchain + qemu-user (route A)
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ninja-build ccache qemu-user ${{ matrix.apt_pkgs }}
+      - name: build + qemu ctest (route A, apt)
+        env:
+          LOG_DIR: ci-logs/ab-${{ matrix.abi }}-apt
+        run: bash scripts/ci/build-test.sh "${{ matrix.abi }}" --toolchain "${{ matrix.apt_tc }}" --build-dir "build-ab-${{ matrix.abi }}-apt"
+      - name: fetch prebuilt asset (route B)
+        # Tolerated: until the assets are published this step is expected to
+        # fail closed, and route A above must still have run.
+        continue-on-error: true
+        run: bash scripts/ci/fetch-toolchain-assets.sh "${{ matrix.asset_triple }}"
+      - name: toolchain identity (the two routes must differ)
+        continue-on-error: true
+        run: |
+          echo "== route A (apt): ${{ matrix.apt_tc }} =="
+          command -v "${{ matrix.apt_cc }}" || true
+          "${{ matrix.apt_cc }}" -v 2>&1 | tail -1 || true
+          echo "A -print-sysroot: $("${{ matrix.apt_cc }}" -print-sysroot 2>/dev/null || true)"
+          echo "== route B (asset): ${{ matrix.asset_tc }} =="
+          asset_cc="/opt/corocc-toolchain/${{ matrix.asset_triple }}/bin/${{ matrix.asset_triple }}-gcc"
+          command -v "$asset_cc" || true
+          "$asset_cc" -v 2>&1 | tail -1 || true
+          echo "B -print-sysroot: $("$asset_cc" -print-sysroot 2>/dev/null || true)"
+      - name: build + qemu ctest (route B, asset)
+        env:
+          LOG_DIR: ci-logs/ab-${{ matrix.abi }}-asset
+        run: bash scripts/ci/build-test.sh "${{ matrix.abi }}" --toolchain "${{ matrix.asset_tc }}" --build-dir "build-ab-${{ matrix.abi }}-asset"
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-ab-${{ matrix.abi }}
+          path: ci-logs/ab-${{ matrix.abi }}-*
+          if-no-files-found: ignore

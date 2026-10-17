@@ -65,13 +65,18 @@ available locally (see [ABI.md](ABI.md) for the layout results):
 | `loongarch64-unknown-linux-gnu` | loongarch64 LE (LP64D) | LP64 | `qemu-loongarch64` | yes (plus full suite; vendored backend, Boost 1.92.0) |
 | `sparc64-unknown-linux-gnu` | sparc64 BE (V9) | LP64 | `qemu-sparc64` | yes (plus full suite; vendored backend, Boost 1.92.0) |
 
-"Prebuilt toolchain" rows use the sha256-verified toolchain/sysroot assets
+"Prebuilt toolchain" rows use the sha256-verified single-tree toolchain assets
 fetched by `scripts/ci/fetch-toolchain-assets.sh` (same flow in CI and
-locally). The assets are not self-contained for binutils: most
-`<triple>-{ld,ar,nm,...}` entries are absolute symlinks into the host
-cross-binutils under `/usr/bin`, and `armeb`'s `as` is a thin
-`exec /usr/bin/arm-linux-gnueabi-as -EB` wrapper, so those rows keep their apt
-binutils packages. The full per-site source table is in [toolchains.md](toolchains.md).
+locally): one archive per triple, top level
+`corocc-toolchain/<triple>/{bin,...,sysroot/}`, unpacked under `/opt`. The
+asset is self-contained in the narrow sense that the compiler
+`bin/<triple>-gcc` carries its own binutils, no symlink inside the tree points
+outside it, and `-print-sysroot` is relocatable; this removes the former
+absolute `/usr/bin` symlinks and the dependency on the host cross-compiler
+identity. It does not remove the dependency on the host C runtime: with its
+bundled libraries the asset still relies on the host glibc / `ld-linux` (so
+those rows keep their apt runtime packages). The full per-site source table is
+in [toolchains.md](toolchains.md).
 "Local probe" means the ABI layout probe was additionally compiled
 and run on that toolchain during the documentation verification pass;
 "plus full suite" means the complete CTest suite also ran locally under
