@@ -20,6 +20,7 @@
 | 守护页 | 每个协程栈映射一个 `PROT_NONE` 守护页,溢出即触发缺页而不是破坏相邻内存 |
 | 消毒器 | ASan fiber-switch 钩子(`COROCC_ASAN`),含栈用后即返回检测;ThreadSanitizer 套件覆盖运行时的投递队列、身份注册表与原子操作 |
 | 与 Boost 共存 | 重命名符号后的汇编可与真实 Boost.Context 同进程链接(`boost_coexist` 测试);可选的 header-only Boost.Asio 集成让套接字在协程内呈现阻塞形态 |
+| 宿主驱动 | 可选驱动层(`coro_rt_driver.h`)让宿主提供运行时的门铃、时钟与定时器;LOOP 运行时(无 worker 线程)由宿主循环 `coro_rt_pump` 推进。参考后端:Boost.Asio、libuv、libevent([examples/backends](examples/backends))。未挂驱动时默认路径不变 |
 | 工具链 | GCC / Clang / MSVC(x64/x86/ARM64)/ Apple clang(macOS x86_64/arm64),以及基于 CMake toolchain 文件的交叉编译;支持 Android NDK 编译链接 |
 | 分发 | 每个 tag 发布按三元组打包的预编译静态库归档,内含 CMake config 包与零依赖消费示例 |
 

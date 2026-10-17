@@ -9,7 +9,8 @@
 [coro_rt.zh-CN.md](api/coro_rt.zh-CN.md)、
 [coro_sched.zh-CN.md](api/coro_sched.zh-CN.md)、
 [coro_scope.zh-CN.md](api/coro_scope.zh-CN.md)、
-[coro_cpp.zh-CN.md](api/coro_cpp.zh-CN.md));本页是跨面的二进制契约与实测
+[coro_cpp.zh-CN.md](api/coro_cpp.zh-CN.md)、
+[coro_rt_driver.zh-CN.md](api/coro_rt_driver.zh-CN.md));本页是跨面的二进制契约与实测
 布局表。
 
 ## ABI 覆盖范围
@@ -17,15 +18,20 @@
 | 面 | 本文档钉死的内容 |
 | --- | --- |
 | 公开函数 | 名称、签名、调用约定、返回类型(`extern "C"`)。 |
-| 公开枚举 | `coro_status`、`coro_state`:数值冻结。 |
-| 完整公开结构体 | `coro_stack`、`coro_ctx`、`coro_attr_t`、`coro_allocator_t`、`coro_rt_mutex`、`coro_rt_cond`、`coro_rt_sem`、`coro_rt_rwlock`、`coro_rt_channel`、`coro_rt_scope_t`:`sizeof`、对齐、字段偏移。 |
-| 不透明句柄 | `coro_t`、`coro_rt_t`、`coro_sched_t`:仅指针宽度——其背后的布局为私有,可自由变化。 |
+| 公开枚举 | `coro_status`、`coro_state`、`coro_driver_flags`:数值冻结。 |
+| 完整公开结构体 | `coro_stack`、`coro_ctx`、`coro_attr_t`、`coro_allocator_t`、`coro_rt_mutex`、`coro_rt_cond`、`coro_rt_sem`、`coro_rt_rwlock`、`coro_rt_channel`、`coro_rt_scope_t`、`coro_rt_driver_ops`:`sizeof`、对齐、字段偏移。 |
+| 不透明句柄 | `coro_t`、`coro_rt_t`、`coro_sched_t`、`coro_rt_driver_t`:仅指针宽度——其背后的布局为私有,可自由变化。 |
 | 符号可见性 | `COROCC_API` 宏(`coro_status.h`):公开头中唯一的平台条件,只影响符号装饰,绝不影响布局。 |
 | 常量 | `CORO_DEFAULT_STACK_SIZE`、`CORO_LOCAL_SLOTS`、`CORO_TOKEN_NONE`、`CORO_TOKEN_DEAD`、`CORO_F_NONE`。 |
 
 未列出的都是实现细节。特别地,公开头中**没有任何影响布局的条件编译**:
 `include/corocc/` 里唯一的 `_WIN32` 条件就是 `coro_status.h` 中的
 `COROCC_API` 宏。
+
+运行时驱动层(`coro_rt_driver.h`)是**纯新增**:它引入完整结构体
+`coro_rt_driver_ops`(其首字段 `struct_size` 为 vtable 的前向兼容扩展打标)、
+枚举 `coro_driver_flags`、不透明句柄 `coro_rt_driver_t` 与若干新函数;而
+`coro_rt.h` 的面与内置后端不变。未挂驱动时运行时逐位走内置路径。
 
 ## 稳定性承诺
 

@@ -21,6 +21,7 @@ instead of silent memory corruption, and zero warnings under
 | Guard pages | Every coroutine stack maps one `PROT_NONE` guard page; overflow faults instead of corrupting neighbours |
 | Sanitizers | ASan fiber-switch hooks (`COROCC_ASAN`), including stack-use-after-return detection; a ThreadSanitizer suite covers the runtime's delivery queue, identity registry and atomics |
 | Boost coexistence | Symbol-renamed assembly coexists with real Boost.Context in one binary (`boost_coexist` test); an optional header-only Boost.Asio integration gives sockets a blocking shape inside coroutines |
+| Host drivers | An optional driver layer (`coro_rt_driver.h`) lets a host supply the runtime's doorbell, clock and timers; a LOOP runtime (no worker threads) is pumped by the host loop (`coro_rt_pump`). Reference backends: Boost.Asio, libuv and libevent ([examples/backends](examples/backends)). With no driver attached the default path is unchanged |
 | Toolchain | GCC, Clang, MSVC (x64/x86/ARM64), Apple clang (macOS x86_64/arm64) and cross builds via CMake toolchain files; Android NDK compile-and-link support |
 | Distribution | Per-triple prebuilt static-library archives on tagged releases, with a CMake config package and a zero-dependency consumer example |
 

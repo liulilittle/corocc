@@ -8,7 +8,8 @@ public type is pinned, and which source changes are compatible with it. The
 per-function contracts live in the API references
 ([coro.md](api/coro.md), [coro_l0.md](api/coro_l0.md),
 [coro_rt.md](api/coro_rt.md), [coro_sched.md](api/coro_sched.md),
-[coro_scope.md](api/coro_scope.md), [coro_cpp.md](api/coro_cpp.md)); this
+[coro_scope.md](api/coro_scope.md), [coro_cpp.md](api/coro_cpp.md),
+[coro_rt_driver.md](api/coro_rt_driver.md)); this
 page is the cross-cutting binary contract plus the measured layout tables.
 
 ## What the ABI covers
@@ -16,9 +17,9 @@ page is the cross-cutting binary contract plus the measured layout tables.
 | Surface | Pinned by this document |
 | --- | --- |
 | Public functions | Name, signature, calling convention, return type (`extern "C"`). |
-| Public enumerations | `coro_status`, `coro_state`: numeric values frozen. |
-| Complete public structures | `coro_stack`, `coro_ctx`, `coro_attr_t`, `coro_allocator_t`, `coro_rt_mutex`, `coro_rt_cond`, `coro_rt_sem`, `coro_rt_rwlock`, `coro_rt_channel`, `coro_rt_scope_t`: `sizeof`, alignment, field offsets. |
-| Opaque handles | `coro_t`, `coro_rt_t`, `coro_sched_t`: pointer width only — the layout behind them is private and may change freely. |
+| Public enumerations | `coro_status`, `coro_state`, `coro_driver_flags`: numeric values frozen. |
+| Complete public structures | `coro_stack`, `coro_ctx`, `coro_attr_t`, `coro_allocator_t`, `coro_rt_mutex`, `coro_rt_cond`, `coro_rt_sem`, `coro_rt_rwlock`, `coro_rt_channel`, `coro_rt_scope_t`, `coro_rt_driver_ops`: `sizeof`, alignment, field offsets. |
+| Opaque handles | `coro_t`, `coro_rt_t`, `coro_sched_t`, `coro_rt_driver_t`: pointer width only — the layout behind them is private and may change freely. |
 | Symbol visibility | The `COROCC_API` macro (`coro_status.h`): the single platform conditional in the public headers, symbol decoration only, never layout. |
 | Constants | `CORO_DEFAULT_STACK_SIZE`, `CORO_LOCAL_SLOTS`, `CORO_TOKEN_NONE`, `CORO_TOKEN_DEAD`, `CORO_F_NONE`. |
 
@@ -26,6 +27,13 @@ Everything not listed is implementation detail. In particular, the public
 headers contain **no layout-affecting conditional compilation**: the only
 `_WIN32` conditional in `include/corocc/` is the `COROCC_API` macro in
 `coro_status.h`.
+
+The runtime driver layer (`coro_rt_driver.h`) is a **pure addition**: it
+introduces the complete `coro_rt_driver_ops` structure (whose leading
+`struct_size` field tags the vtable for forward-compatible extension), the
+`coro_driver_flags` enumeration, the opaque `coro_rt_driver_t` handle and new
+functions, while `coro_rt.h`'s surface and the built-in backend are unchanged.
+With no driver attached a runtime takes the built-in path bit-for-bit.
 
 ## Stability promise
 
