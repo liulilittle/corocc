@@ -364,8 +364,8 @@ coro_status coro_rt_scope_spawn(coro_rt_t* rt, coro_rt_scope_t* s,
         /* Roll the registration back: swap-remove the entry and, when the
            table emptied, release it. The child never existed, so nobody
            can be waiting on it. */
-        struct scope_child** table = (struct scope_child**)s->children;
         coro_plat_mutex_lock(&rt->act_lock);
+        struct scope_child** table = (struct scope_child**)s->children;
         for (size_t i = 0; i < s->nchildren; ++i) {
             if (table[i] == rec) {
                 table[i] = table[--s->nchildren];
@@ -430,8 +430,8 @@ coro_status coro_rt_scope_cancel(coro_rt_t* rt, coro_rt_scope_t* s) {
     for (;;) {
         coro_t* batch[SCOPE_CANCEL_CHUNK];
         size_t n = 0;
-        struct scope_child** table = (struct scope_child**)s->children;
         coro_plat_mutex_lock(&rt->act_lock);
+        struct scope_child** table = (struct scope_child**)s->children;
         for (size_t i = 0; i < s->nchildren && n < SCOPE_CANCEL_CHUNK; ++i) {
             struct scope_child* rec = table[i];
             if (rec && rec->coro && !rec->done && !rec->cancel_issued) {

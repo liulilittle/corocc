@@ -90,6 +90,51 @@ static void rt_cpu_relax(void) {
 #endif
 }
 
+/* ---- timer-heap guard ----
+ *
+ * A worker's sleepers heap is normally touched only by that worker, but a
+ * sleeping node can be re-driven by a peer after a stale delivery; the sleep
+ * then withdraws its deadline from the heap it was actually inserted into
+ * (n->timer.heap), which may be another worker's. A short per-heap spin
+ * serializes that removal against the owner's collect_expired (and the owner's
+ * own top/scan), so the heap array is never mutated by two threads at once. It
+ * is a leaf lock: nothing else is acquired while it is held, and it is never
+ * held across a blocking call. */
+static void sleepers_lock(rt_worker* w) {
+    uintptr_t exp = 0;
+    while (!coro_atp_cas((volatile uintptr_t*)&w->sleepers_lock, &exp, 1)) {
+        exp = 0; /* lost: coro_atp_cas left the observed value in exp */
+    }
+}
+
+static void sleepers_unlock(rt_worker* w) {
+    coro_atp_store((volatile uintptr_t*)&w->sleepers_lock, 0);
+}
+
+/* Withdraw n's armed deadline from the heap that holds it (n->timer.heap),
+   under that heap's lock; the heap is derived from the recorded pointer, so a
+   node moved by a stale delivery is removed from the correct heap. A no-op
+   when the node has no armed timer.
+ *
+ * n->timer.heap is read BEFORE its heap's lock is known (the pointer is what
+ * identifies the lock), so it is loaded atomically (acquire) to remove the
+ * formal data race with the owner's concurrent clear (timer.c stores it with a
+ * release). A stale non-NULL value is harmless: the removal below runs under
+ * the derived heap's lock and is refused (coro_timer_heap_remove checks that
+ * the node is really resident) when the deadline was already withdrawn. The
+ * lock taken here is the sleepers lock, a leaf: no caller holds it already, so
+ * there is no self-deadlock and no lock-order cycle. */
+static void rt_timer_remove(rt_node* n) {
+    coro_timer_heap* h = (coro_timer_heap*)coro_atp_load(
+        (const volatile uintptr_t*)&n->timer.heap);
+    if (!h) return;
+    rt_worker* owner =
+        (rt_worker*)(void*)((char*)h - offsetof(rt_worker, sleepers));
+    sleepers_lock(owner);
+    (void)coro_timer_heap_remove(h, &n->timer);
+    sleepers_unlock(owner);
+}
+
 /* Claim the node's single delivery reference (BT): at most one live inbox
    entry / deque entry exists per node at any time. A delivery that loses the
    claim is collapsed into the live one; the claim is released by the worker
@@ -281,7 +326,7 @@ static void drain_inbox(rt_worker* w) {
         }
         if (node_test(n, RT_WAKE_REQ)) {
             node_clear(n, RT_WAKE_REQ);
-            (void)coro_timer_heap_remove(&w->sleepers, &n->timer);
+            rt_timer_remove(n);   /* from the heap that actually holds it */
         }
         (void)wsdeque_push(&w->queue, n);
         routed = 1;
@@ -293,15 +338,19 @@ static void drain_inbox(rt_worker* w) {
 }
 
 /* Move every node whose deadline has passed from this worker's timer heap to
-   its runnable deque. Owner-only. */
+   its runnable deque. Owner-driven, but the heap is guarded by sleepers_lock
+   because a node that migrated (stale delivery) can have its deadline
+   withdrawn by another worker through rt_timer_remove. */
 static void collect_expired(rt_worker* w) {
     /* Empty-heap short circuit: with no deadline pending there is nothing to
        expire, so the run loop must not pay the monotone-clock read (a virtual-
-       syscall on Linux) just to learn that. The heap is worker-private, so the
-       count load needs no synchronization. */
+       syscall on Linux) just to learn that. This unlocked probe is a hint; the
+       authoritative count is re-read under the lock below. */
     if (w->sleepers.count == 0) return;
     uint64_t now = rt_now(w->rt);
     for (;;) {
+        rt_node* n;
+        sleepers_lock(w);
         /* Capacity gate BEFORE popping the heap or claiming the node: a
            claimed node whose push is then refused would be a dangling
            delivery reference (RT_QUEUED with no deque slot) and its deadline
@@ -309,11 +358,18 @@ static void collect_expired(rt_worker* w) {
            heap for the next collect. The owner is the only writer of bottom,
            so a check that passes cannot be invalidated before the push below
            (a stealer only shrinks the fill). */
-        if (wsdeque_full(&w->queue)) return;
+        if (w->sleepers.count == 0 || wsdeque_full(&w->queue)) {
+            sleepers_unlock(w);
+            return;
+        }
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
-        if (!t || t->deadline > now) return;
+        if (!t || t->deadline > now) {
+            sleepers_unlock(w);
+            return;
+        }
         t = coro_timer_heap_pop(&w->sleepers);
-        rt_node* n = (rt_node*)(void*)((char*)t - offsetof(rt_node, timer));
+        sleepers_unlock(w);
+        n = (rt_node*)(void*)((char*)t - offsetof(rt_node, timer));
         /* BT: route only if this side owns the single delivery reference; a
            live cancel entry routes the node itself. */
         if (!(node_test(n, RT_DYING | RT_DONE)) &&
@@ -363,6 +419,12 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
     waiter = n->waiter_next;
     n->waiter_next = NULL;
     coro_plat_mutex_unlock(&rt->act_lock);
+    /* Withdraw any deadline still armed for this node before it can be freed:
+       a stale early wake can resume a sleep after its deadline passed but
+       before the owner's collect_expired popped it, leaving an entry that would
+       dangle once the node is freed. No-op in the common case (the sleep
+       already withdrew it). */
+    rt_timer_remove(n);
     /* BT death window: an entry pushed before RT_DYING must be consumed here
        (the owner worker drains its own inbox; a push that claimed the slot
        just before RT_DYING lands within the loop). The reference cannot be
@@ -653,8 +715,10 @@ static void worker_main(void* pv) {
         /* Nothing runnable anywhere. Sleep until work appears or the nearest
            deadline in this worker's own heap passes. */
         uint64_t deadline = 0;
+        sleepers_lock(w);
         coro_timer_node* t = coro_timer_heap_top(&w->sleepers);
         if (t) deadline = t->deadline;
+        sleepers_unlock(w);
         worker_sleep(rt, w, deadline);
     }
 
@@ -715,8 +779,10 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
     /* The process default selects the execution family. A LOOP default means
        the runtime owns no worker threads: it has one pump context (worker[0])
        and the host drives it through coro_rt_pump. Built-in and SIGNAL keep the
-       worker pool. Read once, here, before any thread starts. */
-    coro_rt_driver_t* def = coro_rt_driver_default();
+       worker pool. Read once, here, before any thread starts. The default is
+       pinned so the instance this runtime will hold cannot be unregistered and
+       freed underneath us; the hold is released in coro_rt_destroy. */
+    coro_rt_driver_t* def = rt_driver_default_pin();
     unsigned kind = RT_DRV_BUILTIN;
     if (def) {
         kind = (def->ops.flags & CORO_DRIVER_FLAG_LOOP) ? RT_DRV_LOOP
@@ -727,6 +793,7 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
     rt->nworkers = nworkers;
     rt->workers = (rt_worker*)calloc(nworkers, sizeof *rt->workers);
     if (!rt->workers) {
+        rt_driver_unpin(def);
         free(rt);
         return NULL;
     }
@@ -767,6 +834,7 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
         pthread_mutex_destroy(&rt->cache_lock);
         pthread_mutex_destroy(&rt->drv_lock);
 #endif
+        rt_driver_unpin(def);
         free(rt->workers);
         free(rt);
         return NULL;
@@ -984,19 +1052,29 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
     if (!n) return CORO_ESTALE; /* not inside a runtime-scheduled coroutine */
 
     n->timer.deadline = deadline;
+    /* Arm the deadline on the driving worker's heap. The timer node records the
+       heap it lives in (n->timer.heap), so every later removal targets that
+       heap -- never a worker the node has since migrated to. If the heap cannot
+       grow (OOM) the node is not scheduled: report ENOMEM and do not park, so
+       the coroutine keeps running instead of sleeping forever with no timer. */
+    {
+        rt_worker* owner = n->worker;
+        sleepers_lock(owner);
+        int armed = coro_timer_heap_push(&owner->sleepers, &n->timer) == 0;
+        sleepers_unlock(owner);
+        if (!armed) return CORO_ENOMEM;
+    }
     for (;;) {
         node_set(n, RT_WAITING);
         node_set(n, RT_PARKED);
         node_set(n, RT_TIMED);
         (void)rt_pending_requeue(n);   /* round-5: park consumes pending */
-        /* The heap belongs to the worker driving us; it is the only writer. */
-        coro_timer_heap_push(&n->worker->sleepers, &n->timer);
         coro_status st = coro_yield();
         node_clear(n, RT_TIMED);
         if (st != CORO_OK) {
-            /* Cancelled at the park's safe point: take the deadline out and
-               retire the markers (checked no-op when the entry is gone). */
-            coro_timer_heap_remove(&n->worker->sleepers, &n->timer);
+            /* Cancelled at the park's safe point: take the deadline out (from
+               the heap that actually holds it) and retire the markers. */
+            rt_timer_remove(n);
             node_clear(n, RT_WAITING);
             node_clear(n, RT_PARKED);
             return st;
@@ -1004,11 +1082,18 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
         /* BT genuineness: a stale delivery can resume the sleep early; only
            a passed deadline makes the sleep complete. */
         if (rt_now(rt) >= deadline) {
+            /* The deadline may still be armed (a stale wake drove us before the
+               owner's collect_expired popped it); withdraw it so a later retire
+               cannot leave a dangling heap entry. */
+            rt_timer_remove(n);
             node_clear(n, RT_WAITING);
             node_clear(n, RT_PARKED);
             return CORO_OK;
         }
-        coro_timer_heap_remove(&n->worker->sleepers, &n->timer);
+        /* Spurious early wake, still before the deadline: the deadline is
+           already armed in its heap, so just re-park. Re-arming here would move
+           the timer into the current worker's heap and leave a duplicate entry
+           in the original one (two heaps, one index field: corruption). */
         node_clear(n, RT_WAITING);
         node_clear(n, RT_PARKED);
     }
@@ -1097,6 +1182,11 @@ coro_status coro_rt_destroy(coro_rt_t* rt) {
     pthread_mutex_destroy(&rt->cache_lock);
     pthread_mutex_destroy(&rt->drv_lock);
 #endif
+    /* Release the runtime's hold on its driver (the create-time default or the
+       last attach): only now may it be unregistered. No lock is needed -- every
+       worker has stopped and rt->drv is no longer published anywhere. */
+    rt_driver_unpin((coro_rt_driver_t*)coro_atp_load(
+        (const volatile uintptr_t*)&rt->drv));
     free(rt->workers);
     free(rt);
     return CORO_OK;

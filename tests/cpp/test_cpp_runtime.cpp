@@ -313,9 +313,19 @@ static void test_metadata_oom_normalised(void) {
     corocc::runtime rt(2);
     corocc::task<int> t;
 
+    /* Build the attributes BEFORE arming the injection. A default argument
+     * `attrs()` is evaluated at the call site, outside the wrapper's
+     * bad_alloc normalisation; under the MSVC Debug STL the attribute name
+     * string's debug proxy is itself an operator new, so an armed countdown
+     * would fire there, escape the noexcept `attrs()` constructor and
+     * terminate instead of exercising the wrapper. The explicit attributes
+     * are byte-for-byte the default, so the contract under test is
+     * unchanged -- only the accidental pre-wrapper allocation is gone. */
+    const corocc::attrs a;
+
     /* First allocation: the shared result state. */
     g_new_countdown = 0;
-    corocc::status st = rt.spawn_h(t, []() -> int { return 1; });
+    corocc::status st = rt.spawn_h(t, []() -> int { return 1; }, a);
     g_new_countdown = -1;
     CHECK(st.code() == CORO_ENOMEM);
     CHECK(!t.valid());
@@ -323,7 +333,7 @@ static void test_metadata_oom_normalised(void) {
 
     /* Second allocation: the control block itself. */
     g_new_countdown = 1;
-    st = rt.spawn_h(t, []() -> int { return 2; });
+    st = rt.spawn_h(t, []() -> int { return 2; }, a);
     g_new_countdown = -1;
     CHECK(st.code() == CORO_ENOMEM);
     CHECK(!t.valid());
@@ -331,7 +341,7 @@ static void test_metadata_oom_normalised(void) {
 
     /* Detached spawn: the control block is the first allocation. */
     g_new_countdown = 0;
-    st = rt.spawn([]() {});
+    st = rt.spawn([]() {}, a);
     g_new_countdown = -1;
     CHECK(st.code() == CORO_ENOMEM);
     CHECK(rt.pending() == 0u);

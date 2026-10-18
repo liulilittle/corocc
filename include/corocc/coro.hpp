@@ -147,14 +147,22 @@ public:
     attrs() noexcept : stack_size_(0), allocator_(nullptr) {}
 
     attrs& stack_size(std::size_t n) noexcept { stack_size_ = n; return *this; }
-    attrs& name(const std::string& s) { name_ = s; return *this; }
-    attrs& name(const char* s) { name_ = s ? s : ""; return *this; }
+    attrs& name(const std::string& s) {
+        name_ = std::make_shared<const std::string>(s);
+        return *this;
+    }
+    attrs& name(const char* s) {
+        name_ = std::make_shared<const std::string>(s ? s : "");
+        return *this;
+    }
     attrs& allocator(const coro_allocator_t* p) noexcept {
         allocator_ = p; return *this;
     }
 
     std::size_t stack_size_value() const noexcept { return stack_size_; }
-    const std::string& name_value() const noexcept { return name_; }
+    const std::string& name_value() const noexcept {
+        return name_ ? *name_ : static_empty();
+    }
     const coro_allocator_t* allocator_value() const noexcept { return allocator_; }
 
     /* The C face of these attributes. `name_ptr` must stay valid for the
@@ -169,8 +177,26 @@ public:
     }
 
 private:
+    /* The no-name case returns a reference to one shared empty string, so
+       name_value() keeps its signature and the default construction performs
+       no allocation. Residual (accepted): the first no-name name_value() call
+       constructs this static std::string once; under a Debug STL that allocates
+       a container proxy, that single construction can still throw on OOM and,
+       since name_value() is noexcept, terminate. This is a one-time theoretical
+       window on the no-name path only -- the reported abort was the
+       per-construction default attrs() (now allocation-free). */
+    static const std::string& static_empty() noexcept {
+        static const std::string empty;
+        return empty;
+    }
+
     std::size_t stack_size_;
-    std::string name_;
+    /* A shared (copyable) name, null when unset. A shared_ptr default
+       construction is noexcept and allocates nothing, which is what makes
+       attrs() -- and every `= attrs()` default argument evaluated outside a
+       spawn's try -- truly zero-allocation. The name itself is allocated only
+       in attrs::name(...), whose failure surfaces as an ordinary exception. */
+    std::shared_ptr<const std::string> name_;
     const coro_allocator_t* allocator_;
 };
 

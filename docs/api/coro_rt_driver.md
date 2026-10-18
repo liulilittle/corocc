@@ -62,8 +62,8 @@ struct coro_rt_driver_ops {
 
 | Entry point | Contract |
 | --- | --- |
-| `coro_rt_attach_driver(rt, drv)` | Attach `drv` (NULL = detach). Built-in ↔ SIGNAL may be swapped even with coroutines parked: the runtime quiesces the workers, re-arms each pending alarm against the new driver and wakes them, so no deadline is lost. A **cross-family** switch involving LOOP is refused with `CORO_EBUSY` (v1; runtime cross-class switching is a later phase) — a LOOP runtime must be created from a LOOP default. `CORO_EINVAL` for a NULL runtime or an unregistered driver; same-driver re-attach is `CORO_OK`. |
-| `coro_rt_detach_driver(rt)` | Restore the built-in backend. `CORO_OK` when nothing is attached; `CORO_EBUSY` on a LOOP runtime (its threads were never started). |
+| `coro_rt_attach_driver(rt, drv)` | Attach `drv` (NULL = detach). Built-in ↔ SIGNAL may be swapped even with coroutines parked: the runtime quiesces the workers, re-arms each pending alarm against the new driver and wakes them, so no deadline is lost. A **cross-family** switch involving LOOP is a live hot switch (B5): threaded → LOOP quiesces every worker at the barrier and leaves them parked while the host pumps worker[0] through `coro_rt_pump`; LOOP → threaded releases the parked workers (starting them first if the runtime was created in LOOP and never had any). In-flight timed parks survive both directions. A switch that moves the runtime in or out of LOOP is refused with `CORO_EBUSY` only while a pump is running (a quiesce timeout also rolls back to `CORO_EBUSY`). `CORO_EINVAL` for a NULL runtime or an unregistered driver; same-driver re-attach is `CORO_OK`. |
+| `coro_rt_detach_driver(rt)` | Restore the built-in backend. `CORO_OK` when nothing is attached; on a LOOP runtime it releases the parked workers back to thread mode (starting them if the runtime was created in LOOP and never had any); `CORO_EBUSY` while a pump is running. |
 | `coro_rt_attached_driver(rt)` | The attached driver, or NULL (built-in). |
 
 ## The LOOP pump

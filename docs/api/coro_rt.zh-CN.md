@@ -29,7 +29,7 @@ coro_rt_destroy(rt);
 | `coro_rt_wait_all(rt)` | 运行时自身的排空:worker 持续调度,直到无可运行项、无待发定时器、无中途协程。停在永远等不到的唤醒上的协程会像阻塞 join 一样让运行时保持存活。 |
 | `coro_rt_join(rt, c)` | 把**调用它的运行时协程**停放至目标结束;一个目标上的多个等待者全部被释放,各自恰好恢复一次。普通线程或 join 自身句柄返回 `CORO_EAGAIN`;目标已结束(无论句柄是否已回收)返回 `CORO_EDESTROYED`;等待被取消且目标未结束返回 `CORO_ECANCELED`。 |
 | `coro_rt_pending(rt)` | 存活协程数(可运行 + 睡眠 + 阻塞,未结束)。为 0 表示运行时空闲、可以安全销毁。 |
-| `coro_rt_sleep(rt, deadline)` | 把运行中的协程停放至绝对单调时间 `deadline`(传入 `now + delta`)。取消提前唤醒时返回 `CORO_ECANCELED`;协程外调用返回 `CORO_ESTALE`。 |
+| `coro_rt_sleep(rt, deadline)` | 把运行中的协程停放至绝对单调时间 `deadline`(传入 `now + delta`)。取消提前唤醒时返回 `CORO_ECANCELED`;期限无法挂上时返回 `CORO_ENOMEM`(协程继续运行,未停泊);协程外调用返回 `CORO_ESTALE`。 |
 | `coro_rt_yield(void)` | 主动让出 CPU:协程回到可运行集合的尾部,稍后被再次调度。协作式轮转。协程外调用返回 `CORO_ESTALE`。 |
 | `coro_rt_cancel(rt, c)` | 请求协程在下一安全点停止;睡眠中的协程会被移除期限并重新入队,使安全点立即到来。请求绝不强制切换。任意线程安全。 |
 | `coro_rt_destroy(rt)` | 停止全部 worker 并释放运行时。仍有提交未结束的协程时返回 `CORO_EBUSY`;先跑 `coro_rt_wait_all`。仅由未回收的 `coro_rt_spawn_h` 句柄保活的协程不阻止销毁。成功销毁后运行时句柄失效。destroy 具有排他性:并发调用 `coro_rt_spawn`/`coro_rt_spawn_h` 或 `coro_rt_wait_all` 属调用方违规;destroy 会释放复用池仍驻留的全部栈。 |
@@ -45,6 +45,12 @@ join;凭证规则同样适用(至多一条执行流位于协程内),过期 resum
 变更状态、并在释放锁之后才唤醒等待者,唤醒不会丢失,资源也不会被双份交出。
 无竞争获取只需一次 compare-and-swap(或单个锁窗口);两条路径都没有轮询、
 没有自旋。
+
+运行时自身的定时器堆带有一个内部短自旋(`sleepers_lock`):被 peer 重新驱动的
+休眠节点会从真正持有它的堆上摘除期限,该跨 worker 摘除需与属主的到期扫描串行
+化。它是叶锁,仅在一次有界堆操作期间持有、绝不在协程控制路径上,因此不削弱
+`COROCC_PROBE_NOSPIN` 所断言的零自旋属性(它统计的是协程/控制路径上的
+compare-and-swap)。
 
 阻塞型入口仅限协程(普通线程调用返回 `CORO_ESTALE`);`try` 型入口绝不停放、
 任何上下文可调。停放的协程让出 worker,因此单 worker 运行时不会在这些原语上

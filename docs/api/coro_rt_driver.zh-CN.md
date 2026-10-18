@@ -58,8 +58,8 @@ struct coro_rt_driver_ops {
 
 | 入口 | 契约 |
 | --- | --- |
-| `coro_rt_attach_driver(rt, drv)` | 挂载 `drv`(NULL=detach)。内置 ↔ SIGNAL 可在有协程 park 时切换:运行时会 quiesce worker、按新驱动重挂各自 alarm 再唤醒,故不丢 deadline。涉及 LOOP 的**跨类**切换 v1 一律 `CORO_EBUSY`(运行中跨类为后续阶段)——LOOP 运行时须由 LOOP 默认驱动创建。`CORO_EINVAL`(NULL 运行时或未注册驱动);同驱动重复挂载返回 `CORO_OK`。 |
-| `coro_rt_detach_driver(rt)` | 恢复内置后端。未挂时 `CORO_OK`;LOOP 运行时 `CORO_EBUSY`(其线程从未启动)。 |
+| `coro_rt_attach_driver(rt, drv)` | 挂载 `drv`(NULL=detach)。内置 ↔ SIGNAL 可在有协程 park 时切换:运行时会 quiesce worker、按新驱动重挂各自 alarm 再唤醒,故不丢 deadline。涉及 LOOP 的**跨类**切换是实时热切换(B5):threaded → LOOP 会 quiesce 全部 worker 停在 barrier,LOOP 阶段由宿主通过 `coro_rt_pump` 驱动 worker[0];LOOP → threaded 释放被停住的 worker(若运行时在 LOOP 下创建且从未有线程,此时才启动)。两个方向在途的定时 park 都不丢。仅当有 pump 正在运行(或 quiesce 超时回滚)时,进出 LOOP 的切换才返回 `CORO_EBUSY`。`CORO_EINVAL`(NULL 运行时或未注册驱动);同驱动重复挂载返回 `CORO_OK`。 |
+| `coro_rt_detach_driver(rt)` | 恢复内置后端。未挂时 `CORO_OK`;在 LOOP 运行时上会把被停住的 worker 释放回线程模式(若运行时在 LOOP 下创建且从未有线程,此时才启动);有 pump 运行时 `CORO_EBUSY`。 |
 | `coro_rt_attached_driver(rt)` | 当前驱动,或 NULL(内置)。 |
 
 ## LOOP pump

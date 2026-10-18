@@ -32,8 +32,8 @@
 | `coro_status coro_sched_run(s)` | 驱动可运行者,直到无可运行且无待发定时器才返回。因后续唤醒而驻停的协程仍归调度器管,不是留在调用内的理由。 |
 | `coro_status coro_sched_join(s, c)` | 把**调用它的调度器协程**停放在目标的等待链上,目标结束时返回(主线程侧收口用 `coro_sched_wait_all` 或 `coro_sched_run`)。一个目标上的多个等待者全部被释放,且各自恰好被恢复一次。结束返回 `CORO_OK`;NULL、外来协程或等待自身返回 `CORO_EINVAL`;不在本调度器的协程内调用返回 `CORO_ESTALE`;目标在调用前已结束返回 `CORO_EDESTROYED`。 |
 | `coro_status coro_sched_wait_all(s)` | 运行 loop 直到它拥有的每个协程都已结束(join 全部的便捷形式)。 |
-| `coro_status coro_sched_cancel(s, c)` | 请求取消;在下一安全点被观察。睡眠中的协程会被移除期限并重新入队,使安全点立即到来。NULL 或外来协程返回 `CORO_EINVAL`。 |
-| `coro_status coro_sched_sleep(s, deadline)` | 把运行中的协程停放至绝对单调时间 `deadline`。期限到返回 `CORO_OK`;被取消截断返回 `CORO_ECANCELED`;NULL 返回 `CORO_EINVAL`;协程外调用返回 `CORO_ESTALE`。 |
+| `coro_status coro_sched_cancel(s, c)` | 请求取消;在下一安全点被观察。睡眠中的协程会被移除期限并重新入队,使安全点立即到来。NULL 或外来协程返回 `CORO_EINVAL`。句柄必须在整个调用期间保持有效:调度器所有的协程在结束被回收的瞬间即失效(其记账节点与协程对象同生共死);若协程可能与本调用并发结束,调用方必须自行同步——先 join 它,或在自身锁下确保不会被并发释放。否则为未定义行为,可能触及已释放的调度器状态;这与 `coro_sched_spawn_h` 对其返回句柄提出的存活要求一致。 |
+| `coro_status coro_sched_sleep(s, deadline)` | 把运行中的协程停放至绝对单调时间 `deadline`。期限到返回 `CORO_OK`;被取消截断返回 `CORO_ECANCELED`;期限无法挂上时返回 `CORO_ENOMEM`(协程继续运行,未停泊);NULL 返回 `CORO_EINVAL`;协程外调用返回 `CORO_ESTALE`。 |
 | `uint64_t coro_monotonic_ns(void)` | 调度器与其定时器使用的单调时钟。只有差值有意义;进程内永不回退。 |
 
 ## 示例

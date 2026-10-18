@@ -453,7 +453,9 @@ COROCC_API size_t coro_rt_pending(const coro_rt_t* rt);
  * @param rt          Runtime that schedules the coroutine.
  * @param deadline    Absolute monotone nanoseconds.
  * @return CORO_OK when the deadline passed; CORO_ECANCELED when cut short;
- *         CORO_ESTALE when called outside a coroutine; CORO_EINVAL for NULL.
+ *         CORO_ENOMEM when the deadline could not be armed (the coroutine keeps
+ *         running, nothing was parked); CORO_ESTALE when called outside a
+ *         coroutine; CORO_EINVAL for NULL.
  */
 COROCC_API coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline);
 
@@ -544,13 +546,15 @@ COROCC_API coro_status coro_rt_mutex_trylock(coro_rt_t* rt,
  * coro_rt_mutex_unlock -- release a coroutine mutex.
  *
  * Hands the lock to the longest-waiting waiter, if any, and requeues it; the
- * caller keeps running. Must be called by the current holder.
+ * caller keeps running. Must be called by the current holder. It does not park,
+ * so it carries no coroutine-context requirement: a lock taken with
+ * coro_rt_mutex_trylock from a plain thread (which that entry point explicitly
+ * allows) can be released from that same thread.
  *
  * @param rt  Runtime that schedules the caller. Must not be NULL.
  * @param m   Mutex held by the caller; must not be NULL.
- * @return CORO_OK on success; CORO_ESTALE when called outside a runtime
- *         coroutine; CORO_ESTATE when the caller does not hold the mutex;
- *         CORO_EINVAL for NULL.
+ * @return CORO_OK on success; CORO_ESTATE when the caller does not hold the
+ *         mutex; CORO_EINVAL for NULL.
  */
 COROCC_API coro_status coro_rt_mutex_unlock(coro_rt_t* rt,
                                             coro_rt_mutex_t* m);

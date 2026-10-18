@@ -11,6 +11,8 @@
  */
 #include "scheduler/timer.h"
 
+#include "arch/coro_atomic.h"
+
 #include <stdlib.h>
 
 #if defined(_WIN32)
@@ -111,13 +113,15 @@ static int grow(coro_timer_heap* h) {
     return 0;
 }
 
-void coro_timer_heap_push(coro_timer_heap* h, coro_timer_node* n) {
-    if (!h || !n) return;
-    if (grow(h) != 0) return; /* out of memory: the caller sees a missing timer */
+int coro_timer_heap_push(coro_timer_heap* h, coro_timer_node* n) {
+    if (!h || !n) return -1;
+    if (grow(h) != 0) return -1; /* out of memory: the caller sees a missing timer */
     n->index = h->count;
+    coro_atp_store((volatile uintptr_t*)&n->heap, (uintptr_t)h);
     h->nodes[h->count] = n;
     ++h->count;
     sift_up(h, n->index);
+    return 0;
 }
 
 coro_timer_node* coro_timer_heap_top(const coro_timer_heap* h) {
@@ -128,6 +132,7 @@ coro_timer_node* coro_timer_heap_top(const coro_timer_heap* h) {
 coro_timer_node* coro_timer_heap_pop(coro_timer_heap* h) {
     if (!h || h->count == 0) return NULL;
     coro_timer_node* top = h->nodes[0];
+    coro_atp_store((volatile uintptr_t*)&top->heap, 0);
     --h->count;
     if (h->count > 0) {
         h->nodes[0] = h->nodes[h->count];
@@ -151,5 +156,6 @@ int coro_timer_heap_remove(coro_timer_heap* h, coro_timer_node* n) {
         sift_down(h, i);
         sift_up(h, i);
     }
+    coro_atp_store((volatile uintptr_t*)&n->heap, 0);
     return 0;
 }

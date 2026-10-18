@@ -31,6 +31,21 @@ static void entry_sleeps_ms(void* arg) {
     }
 }
 
+/* A coroutine that sleeps once and then plain-yields several times. The park
+   marker of the sleep must be retired when the deadline path requeues it, so
+   each plain yield keeps round-robin requeueing the node instead of being
+   dropped off the run queue. */
+static unsigned g_yield_steps;
+static void entry_sleep_then_yield(void* arg) {
+    (void)arg;
+    coro_status st = coro_sched_sleep(g_sched, coro_monotonic_ns() + 1000000ull);
+    if (st != CORO_OK) return;
+    for (unsigned i = 0; i < 5u; ++i) {
+        if (coro_yield() != CORO_OK) return;
+        ++g_yield_steps;
+    }
+}
+
 /* One long sleep: only a cancellation can end it early. */
 static coro_t* g_target;
 static void entry_sleep_long(void* arg) {
@@ -63,6 +78,39 @@ static void* cancel_after_a_while(void* pv) {
 }
 #endif
 
+/* A cancellation filed while the target is RUNNING (it never parks) must not
+   outlive the target: retire_node frees the node, and a wake-list entry left
+   behind would make the next drain touch freed memory (heap-use-after-free).
+   The body spins until released, so it never observes the cancel and never
+   yields. */
+static coro_t*       g_busy_target;
+static volatile long g_busy_in_body;
+static volatile long g_busy_go;
+
+static void entry_busy_until_go(void* arg) {
+    (void)arg;
+    g_busy_in_body = 1;
+    while (!g_busy_go) { /* spin: never yields, never observes the cancel */ }
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall cancel_running_then_release(void* pv) {
+    (void)pv;
+    while (!g_busy_in_body) { /* wait until the body is running */ }
+    CHECK(coro_sched_cancel(g_sched, g_busy_target) == CORO_OK);
+    g_busy_go = 1;
+    return 0;
+}
+#else
+static void* cancel_running_then_release(void* pv) {
+    (void)pv;
+    while (!g_busy_in_body) { /* wait until the body is running */ }
+    CHECK(coro_sched_cancel(g_sched, g_busy_target) == CORO_OK);
+    g_busy_go = 1;
+    return NULL;
+}
+#endif
+
 static void run_tests(void) {
     coro_sched_t* s = coro_sched_create();
     g_sched = s;
@@ -90,6 +138,48 @@ static void run_tests(void) {
         }
         /* the loop returns only after the last deadline, so it waited */
         CHECK(wall >= longest);
+    }
+
+    /* ---------- a sleep wake-up does not strand later plain yields -------
+       Regression for a stale park marker: the sleep's wakeup (deadline
+       expiry) must retire the marker so the plain yield after it is requeued
+       by the round-robin loop; otherwise the coroutine is dropped with the
+       scheduler still counting it as live. */
+    {
+        g_yield_steps = 0;
+        CHECK(coro_sched_spawn(s, NULL, entry_sleep_then_yield, NULL) == CORO_OK);
+        CHECK(coro_sched_pending(s) == 1u);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        CHECK(coro_sched_pending(s) == 0u);
+        CHECK(g_yield_steps == 5u);
+    }
+
+    /* ---------- a cancel of a running node does not outlive it ----------
+       The wake request filed for a node that is running (never parked) must
+       be dropped when the node retires; otherwise the next drain reads freed
+       memory. Deterministic under ASan. */
+    {
+        g_busy_target = NULL;
+        g_busy_in_body = 0;
+        g_busy_go = 0;
+        CHECK(coro_sched_spawn_h(s, NULL, entry_busy_until_go, NULL,
+                                 &g_busy_target) == CORO_OK);
+        CHECK(g_busy_target != NULL);
+#if defined(_WIN32)
+        HANDLE busy_canceller = (HANDLE)_beginthreadex(
+            NULL, 0, cancel_running_then_release, NULL, 0, NULL);
+        CHECK(busy_canceller != NULL);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        WaitForSingleObject(busy_canceller, INFINITE);
+        CloseHandle(busy_canceller);
+#else
+        pthread_t busy_canceller;
+        CHECK(pthread_create(&busy_canceller, NULL,
+                             cancel_running_then_release, NULL) == 0);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        pthread_join(busy_canceller, NULL);
+#endif
+        CHECK(coro_sched_pending(s) == 0u);
     }
 
     /* ---------- a cancellation cuts a long sleep short ---------- */

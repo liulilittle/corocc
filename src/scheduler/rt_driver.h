@@ -41,8 +41,10 @@
  * A driver is process-level state: it is not owned by any runtime, and the
  * registry (rt_driver.c) is the only code that creates, links and frees one.
  * ops is a private copy of the caller's vtable; ctx is the caller's pointer and
- * must outlive the instance's use. refs counts live attaches (B2); until then it
- * stays zero. next is the process registry link.
+ * must outlive the instance's use. refs counts live holds by runtimes: one per
+ * runtime that adopted it as its create-time default and one per live attach.
+ * coro_rt_driver_unregister refuses while it is non-zero, so an instance in use
+ * can never be freed. next is the process registry link.
  */
 struct coro_rt_driver {
     struct coro_rt_driver_ops ops;   /**< Private copy of the caller's vtable. */
@@ -96,5 +98,26 @@ void rt_alarm_wake(void* arg);
 
 /** rt_driver_registered -- whether drv is an instance the registry owns. */
 int rt_driver_registered(const coro_rt_driver_t* drv);
+
+/**
+ * rt_driver_pin / rt_driver_unpin -- hold and release a registry instance.
+ *
+ * rt_driver_pin tests registry ownership and increments the hold count in one
+ * registry-lock critical section, so the caller may safely use drv afterwards
+ * (unregister is refused until the matching rt_driver_unpin). Returns 1 when
+ * drv is a registered instance (and was pinned), 0 otherwise.
+ */
+int rt_driver_pin(coro_rt_driver_t* drv);
+void rt_driver_unpin(coro_rt_driver_t* drv);
+
+/**
+ * rt_driver_default_pin -- pin and return the process default.
+ *
+ * Like rt_driver_default, but the default is pinned in the same critical
+ * section it is read, so a concurrent set_default(NULL)+unregister cannot free
+ * it before the caller stores it. Returns NULL when the built-in path is in
+ * effect. The caller releases the pin with rt_driver_unpin.
+ */
+coro_rt_driver_t* rt_driver_default_pin(void);
 
 #endif /* COROCC_SCHEDULER_RT_DRIVER_H */

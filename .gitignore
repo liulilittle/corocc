@@ -8,3 +8,8 @@ ci-logs/
 *.obj
 *.o
 *.a
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe

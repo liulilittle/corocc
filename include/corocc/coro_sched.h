@@ -168,6 +168,18 @@ COROCC_API coro_status coro_sched_wait_all(coro_sched_t* s);
  * coro_cancel documents. If it is sleeping, its deadline is removed and it is
  * requeued so that safe point is reached now instead of at the deadline.
  *
+ * The handle must stay valid for the whole call. A scheduler-owned coroutine
+ * is released the instant it finishes and the scheduler retires it; the
+ * scheduler's bookkeeping node and the coroutine object live and die together
+ * (the retire and lost-claim paths destroy the coroutine and then free the
+ * node in the same place), so the handle's lifetime is also the node's. If the
+ * coroutine may finish concurrently with this call, the caller must
+ * synchronize -- join it first, or otherwise guarantee under its own lock that
+ * it cannot be released concurrently. Calling with a handle that may be freed
+ * underneath is undefined behavior and may touch freed scheduler state. This
+ * is the same lifetime requirement coro_sched_spawn_h states for the handle it
+ * returns.
+ *
  * @param s  Scheduler that owns the coroutine.
  * @param c  Coroutine to cancel.
  * @return CORO_OK on success; CORO_EINVAL for a NULL argument or a coroutine
@@ -192,6 +204,8 @@ COROCC_API coro_status coro_sched_cancel(coro_sched_t* s, coro_t* c);
  * @param deadline  Absolute monotone nanoseconds.
  * @return CORO_OK when the deadline passed;
  *         CORO_ECANCELED when the sleep was cut short by a cancellation;
+ *         CORO_ENOMEM when the deadline could not be armed (the coroutine keeps
+ *         running, nothing was parked);
  *         CORO_EINVAL for a NULL scheduler, or CORO_ESTALE when called outside
  *         any coroutine.
  */

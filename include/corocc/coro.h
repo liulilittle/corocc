@@ -216,8 +216,8 @@ COROCC_API coro_state coro_get_state(const coro_t* c);
  *              Only written on success.
  * @return CORO_OK on success;
  *         CORO_EINVAL if c or next is NULL;
- *         CORO_EBUSY if the coroutine is running or mid-switch on some thread,
- *         or if it belongs to another thread (see below);
+ *         CORO_EBUSY if the coroutine is running or mid-switch on some thread
+ *         (a concurrent drive lost the claim);
  *         CORO_ESTALE if it was already started and parked (resume it with the
  *         token you were given instead of starting it again);
  *         CORO_EDESTROYED if it is already dead.

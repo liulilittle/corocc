@@ -24,10 +24,16 @@
                                    one TU are C2375 under MSVC (dllimport /
                                    dllexport mismatch). */
 
+struct coro_timer_heap; /* forward: coro_timer_node records its owning heap. */
+
 /** coro_timer_node -- one deadline; the owner embeds it by value. */
 typedef struct coro_timer_node {
     uint64_t deadline;   /**< Absolute monotone nanoseconds. */
     size_t   index;      /**< PRIVATE: position in its heap, for O(log n) removal. */
+    struct coro_timer_heap* heap; /**< PRIVATE: the heap that currently holds this
+                                       node, or NULL when it is in none. A removal
+                                       targets the heap the node actually lives in
+                                       rather than a caller-guessed one. */
 } coro_timer_node;
 
 /** coro_timer_heap -- deadlines ordered soonest first. */
@@ -55,8 +61,13 @@ void coro_timer_heap_destroy(coro_timer_heap* h);
  * coro_timer_heap_push -- schedule a node at its deadline.
  *
  * The node must not already be in a heap; its deadline must already be set.
+ * On success the node records this heap in n->heap, so a later removal can
+ * target the heap the node actually lives in.
+ *
+ * @return 0 on success; non-zero when the heap could not grow (out of memory):
+ *         the node is then NOT scheduled and stays out of every heap.
  */
-void coro_timer_heap_push(coro_timer_heap* h, coro_timer_node* n);
+int coro_timer_heap_push(coro_timer_heap* h, coro_timer_node* n);
 
 /** coro_timer_heap_top -- soonest deadline, NULL when empty. */
 coro_timer_node* coro_timer_heap_top(const coro_timer_heap* h);

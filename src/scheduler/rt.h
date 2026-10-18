@@ -86,6 +86,12 @@ struct rt_worker {
     wsdeque         queue;        /**< runnable; private end owned by this worker. */
     mpsc            inbox;        /**< cross-thread wakeups, lock-free. */
     coro_timer_heap sleepers;     /**< deadlines; this worker is the only writer. */
+    uintptr_t       sleepers_lock; /**< 0 free, 1 held: guards `sleepers`. A stale
+                                        delivery can move a node to another
+                                        worker, so a removal issued there must be
+                                        serialized against the owner's
+                                        collect_expired. Zero-init is the whole
+                                        contract (rt_worker is calloc'd). */
     rt_node*        running;      /**< node being driven right now. */
     uint64_t        stop;         /**< shutdown requested (atomic). */
     /* B2: this worker's alarm, owned by the attached driver. All of these are

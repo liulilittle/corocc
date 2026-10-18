@@ -139,6 +139,15 @@ coro_attr_t coro_attr_default(void) {
     return a;
 }
 
+/* Classify a stack-allocation failure for coro_create's documented return set
+   (coro.h:164): a size the stack layer refuses cannot be served with a guard
+   page, which is CORO_EINVAL; every other failure is an allocation/mapping
+   failure, CORO_ENOMEM. Both coro_stack_alloc and a custom allocator report
+   this distinction, so it is preserved instead of flattened to CORO_ENOMEM. */
+static coro_status stack_alloc_fail(coro_status st) {
+    return (st == CORO_EINVAL) ? CORO_EINVAL : CORO_ENOMEM;
+}
+
 coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
                         void* arg) {
     if (!out || !fn) return CORO_EINVAL;
@@ -160,9 +169,10 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
            path calloc's for the same reason. */
         memset(c, 0, sizeof *c);
         void* mem = NULL;
-        if (a.allocator->alloc_stack(&mem, stk_size) != CORO_OK) {
+        coro_status sst = a.allocator->alloc_stack(&mem, stk_size);
+        if (sst != CORO_OK) {
             a.allocator->free_handle(c);
-            return CORO_ENOMEM;
+            return stack_alloc_fail(sst);
         }
         c->stack.base = mem;
         c->stack.total = stk_size;
@@ -172,9 +182,10 @@ coro_status coro_create(coro_t** out, const coro_attr_t* attr, coro_fn fn,
     } else {
         c = (coro_t*)calloc(1, sizeof *c);
         if (!c) return CORO_ENOMEM;
-        if (coro_stack_alloc(&c->stack, stk_size) != CORO_OK) {
+        coro_status sst = coro_stack_alloc(&c->stack, stk_size);
+        if (sst != CORO_OK) {
             free(c);
-            return CORO_ENOMEM;
+            return stack_alloc_fail(sst);
         }
     }
     c->fn = fn;

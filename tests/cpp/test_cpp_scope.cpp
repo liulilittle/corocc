@@ -329,16 +329,25 @@ static void test_metadata_oom(void) {
     corocc::scope s(rt);
     corocc::cell<int> out;
 
+    /* Build the attributes BEFORE arming the injection: a default argument
+     * `attrs()` is evaluated at the call site, outside the wrapper's
+     * bad_alloc normalisation, and under the MSVC Debug STL its name
+     * string's debug proxy is itself an operator new. An armed countdown
+     * would fire there, escape the noexcept constructor and terminate
+     * before any wrapper code ran. These attributes are byte-for-byte the
+     * default, so the contract under test is unchanged. */
+    const corocc::attrs a;
+
     /* First allocation: the shared child state. */
     g_new_countdown = 0;
-    corocc::status st = s.spawn(out, []() -> int { return 1; });
+    corocc::status st = s.spawn(out, []() -> int { return 1; }, a);
     g_new_countdown = -1;
     CHECK(st.code() == CORO_ENOMEM);
     CHECK(!out.valid());
 
     /* Second allocation: the control block. */
     g_new_countdown = 1;
-    st = s.spawn(out, []() -> int { return 2; });
+    st = s.spawn(out, []() -> int { return 2; }, a);
     g_new_countdown = -1;
     CHECK(st.code() == CORO_ENOMEM);
     CHECK(!out.valid());
@@ -353,7 +362,7 @@ static void test_metadata_oom(void) {
     corocc::status grow_st(CORO_OK);
     for (int i = 0; i < 64; ++i) {
         g_new_countdown = 2;
-        grow_st = s.spawn([&ran]() { ran.fetch_add(1); });
+        grow_st = s.spawn([&ran]() { ran.fetch_add(1); }, a);
         g_new_countdown = -1;
         if (grow_st.code() == CORO_ENOMEM) break;
         CHECK(grow_st.ok());
@@ -362,7 +371,7 @@ static void test_metadata_oom(void) {
     CHECK(grow_st.code() == CORO_ENOMEM);
     {
         g_new_countdown = 2;
-        st = s.spawn(out, []() -> int { return 3; });
+        st = s.spawn(out, []() -> int { return 3; }, a);
         g_new_countdown = -1;
         /* The typed variant hits the same growth gate. The table may have
          * just grown (capacity spare), in which case this spawn succeeds and

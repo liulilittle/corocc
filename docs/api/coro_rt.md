@@ -33,7 +33,7 @@ coro_rt_destroy(rt);
 | `coro_rt_wait_all(rt)` | The runtime's own drain: workers keep scheduling until nothing is runnable, no timer is pending and no coroutine is mid-flight. A coroutine parked on a wakeup that never comes keeps the runtime alive, as with a blocking join. |
 | `coro_rt_join(rt, c)` | Park the **calling runtime coroutine** until the target ends; several waiters on one target are all released, each resumed exactly once. `CORO_EAGAIN` from a plain thread or when joining the caller's own handle; `CORO_EDESTROYED` when the target already finished (whether or not its handle was collected); `CORO_ECANCELED` when the wait was cancelled and the target had not finished. |
 | `coro_rt_pending(rt)` | Live coroutine count (runnable + sleeping + blocked, not yet finished). Zero means the runtime is idle and safe to destroy. |
-| `coro_rt_sleep(rt, deadline)` | Park the running coroutine until the absolute monotone `deadline` (pass `now + delta`). `CORO_ECANCELED` when a cancellation wakes it early; `CORO_ESTALE` outside a coroutine. |
+| `coro_rt_sleep(rt, deadline)` | Park the running coroutine until the absolute monotone `deadline` (pass `now + delta`). `CORO_ECANCELED` when a cancellation wakes it early; `CORO_ENOMEM` when the deadline could not be armed (the coroutine keeps running, nothing was parked); `CORO_ESTALE` outside a coroutine. |
 | `coro_rt_yield(void)` | Voluntarily give up the CPU: the coroutine goes to the back of the runnable set and is scheduled again later. Cooperative round-robin. `CORO_ESTALE` outside a coroutine. |
 | `coro_rt_cancel(rt, c)` | Ask a coroutine to stop at its next safe point; a sleeping coroutine has its deadline removed and is requeued so the safe point comes now. The request never forces a switch. Safe from any thread. |
 | `coro_rt_destroy(rt)` | Stop every worker and release the runtime. `CORO_EBUSY` while coroutines submitted to it are still live; run `coro_rt_wait_all` first. A coroutine kept alive only by an uncollected `coro_rt_spawn_h` handle does not block destruction. After a successful destroy the runtime handle is invalid. A destroy is exclusive: concurrent `coro_rt_spawn`/`coro_rt_spawn_h` or `coro_rt_wait_all` calls are a caller violation, and the destroy releases every stack the reuse pool still holds. |
@@ -53,6 +53,14 @@ and wakes the waiter only after releasing it, no wake can be lost and no
 resource can be double-handed. An uncontended acquire costs a single
 compare-and-swap (or a single lock window); there is no poll and no spin in
 either path.
+
+The runtime's timer heap carries one short internal spin (`sleepers_lock`): a
+sleeping node re-driven by a peer withdraws its deadline from the heap that
+actually holds it, and that cross-worker removal is serialized against the
+owner's expiry scan. It is a leaf lock, held only for a bounded heap operation
+and never on the coroutine control path, so it does not weaken the zero-spin
+property asserted by `COROCC_PROBE_NOSPIN` (which counts compare-and-swaps on
+the coroutine/control path).
 
 Blocking entries are coroutine-only (`CORO_ESTALE` from a plain thread); the
 `try` entries never park and are callable from any context. A parked
