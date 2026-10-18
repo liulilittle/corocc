@@ -115,7 +115,7 @@ the overflow suite accepts alongside Linux's `SIGSEGV`.
 | Build | Switch | Scope | Notes |
 | --- | --- | --- | --- |
 | AddressSanitizer | `-DCOROCC_ASAN=ON` | Fiber-switch hooks (`__sanitizer_start_switch_fiber`/`finish_switch_fiber`) around every context switch, including stack-use-after-return detection. The functional suite runs under the sanitizer; the three misuse-detection suites (`coro_exactlyonce`, `coro_crossresume`, `conc_double_resume`) are excluded because the sanitizer intercepts their deliberate abort path, and the performance suites are not registered in this configuration. | Linux CI job; MSVC `/fsanitize=address` is also supported by the build option. |
-| ThreadSanitizer | `-DCOROCC_TSAN=ON` | The runtime's delivery queue, identity registry and atomics, exercised by the `conc_runtime_tsan` suite. | TSan cannot follow an assembly stack switch, so the drive path itself is not instrumentable; see [coro.md](api/coro.md) for how the verification is split. Linux CI job; gcc's `-Wtsan` on `__atomic_thread_fence` is waived (not an error). |
+| ThreadSanitizer | `-DCOROCC_TSAN=ON` | Fiber-switch annotations (`__tsan_create_fiber`/`__tsan_switch_to_fiber`, see `src/arch/coro_tsan.h`) around every context switch, so TSan follows the assembly stack switch. The full test suite runs race-free under the sanitizer. | Linux CI job; gcc's `-Wtsan` on `__atomic_thread_fence` is waived (not an error). |
 | Zero-spin probe | `-DCOROCC_PROBE_NOSPIN=ON` | Counts compare-and-swap attempts so the zero-spin contract can be asserted by the `coro_nospin` suite. | Linux CI job. |
 
 ASan and TSan are mutually exclusive in one build; both build and run the

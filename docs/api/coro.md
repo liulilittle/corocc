@@ -272,9 +272,9 @@ The concurrency suites live in `tests/concurrency/`:
 | `test_conc_double_resume` | At most one execution flow enters a suspension point when several threads present one credential, over a fixed-seed 200-round delivery stress. | native, ASan, aarch64/QEMU |
 | `test_conc_runtime_tsan` | The delivery queue, identity registry and atomics are race-free, from several threads at once. | ThreadSanitizer (CI) |
 
-ThreadSanitizer cannot follow a stack switch performed by assembly, so the
-drive path itself is not instrumentable. The concurrency verification is
-therefore split into an instrumentable part (the delivery queue, the identity
-registry and the atomics, exercised by the TSan suite) and a behavioural part
-(the exactly-once claim, the rejection codes, a coroutine left drivable), which
-runs in the ordinary suites on every platform.
+ThreadSanitizer follows the assembly stack switch through the fiber-switch
+annotations (`__tsan_create_fiber`/`__tsan_switch_to_fiber`, see
+`src/arch/coro_tsan.h`), so the drive path is instrumentable too: the whole
+concurrency surface -- the delivery queue, the identity registry, the atomics
+and the coroutine drive path -- is covered race-free by the TSan job, alongside
+the behavioural exactly-once suites that run on every platform.

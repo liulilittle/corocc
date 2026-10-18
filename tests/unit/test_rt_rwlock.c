@@ -52,12 +52,12 @@ static void reader_entry(void* pv) {
     for (unsigned i = 0; i < ROUNDS; ++i) {
         if (coro_rt_rwlock_rdlock(rt, &g_rw) != CORO_OK) return;
         uint64_t n = coro_at_fetch_add(&g_readers_in, 1) + 1;
-        if (n > g_max_readers) g_max_readers = n;
+        if (n > coro_at_load(&g_max_readers)) coro_at_store(&g_max_readers, n);
         /* Hold the read lock for a while: a writer that acquires in two steps
            would show its RW_W bit inside this window. */
         for (unsigned k = 0; k < 64u; ++k) {
-            if (coro_at_load(&g_rw.state) & RW_W_BIT) g_conflict = 1;
-            if (coro_at_load(&g_writers_in) != 0) g_conflict = 1;
+            if (coro_at_load(&g_rw.state) & RW_W_BIT) coro_at_store(&g_conflict, 1);
+            if (coro_at_load(&g_writers_in) != 0) coro_at_store(&g_conflict, 1);
             coro_yield();
         }
         (void)coro_at_fetch_add(&g_read_rounds, 1);
@@ -72,8 +72,8 @@ static void writer_entry(void* pv) {
     for (unsigned i = 0; i < ROUNDS; ++i) {
         if (coro_rt_rwlock_wrlock(rt, &g_rw) != CORO_OK) return;
         uint64_t n = coro_at_fetch_add(&g_writers_in, 1) + 1;
-        if (n > g_max_writers) g_max_writers = n;
-        if (coro_at_load(&g_readers_in) != 0) g_conflict = 1;
+        if (n > coro_at_load(&g_max_writers)) coro_at_store(&g_max_writers, n);
+        if (coro_at_load(&g_readers_in) != 0) coro_at_store(&g_conflict, 1);
         (void)coro_at_fetch_add(&g_write_rounds, 1);
         (void)coro_at_fetch_add(&g_counter, 1);
         coro_at_fetch_add(&g_writers_in, ~(uint64_t)0);

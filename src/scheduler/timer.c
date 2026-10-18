@@ -129,6 +129,15 @@ coro_timer_node* coro_timer_heap_top(const coro_timer_heap* h) {
     return h->nodes[0];
 }
 
+size_t coro_timer_heap_count(const coro_timer_heap* h) {
+    return h ? h->count : 0;
+}
+
+coro_timer_node* coro_timer_heap_at(const coro_timer_heap* h, size_t i) {
+    if (!h || i >= h->count) return NULL;
+    return h->nodes[i];
+}
+
 coro_timer_node* coro_timer_heap_pop(coro_timer_heap* h) {
     if (!h || h->count == 0) return NULL;
     coro_timer_node* top = h->nodes[0];

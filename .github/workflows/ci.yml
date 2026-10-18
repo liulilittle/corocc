@@ -89,7 +89,12 @@ jobs:
       # warning stays visible in the log). Effective flag set:
       # -fsanitize=thread -Wno-error=tsan; the sanitizer flag itself comes
       # from the COROCC_TSAN branch.
-      - run: bash scripts/ci/build-test.sh tsan --select conc_runtime_tsan -- -DCOROCC_TSAN=ON -DCMAKE_C_FLAGS=-Wno-error=tsan -DCMAKE_CXX_FLAGS=-Wno-error=tsan
+      # Widened from the conc_runtime_tsan-only selection to the full ctest
+      # population (still -E cpp_perf): the fiber-switch annotations in
+      # src/arch/coro_tsan.h cleared the stack-switch false positives and the
+      # remaining races were fixed, so every TSan suite is now a gate. The
+      # site-matrix tsan floor tracks the native rows (47|46).
+      - run: bash scripts/ci/build-test.sh tsan -- -DCOROCC_TSAN=ON -DCMAKE_C_FLAGS=-Wno-error=tsan -DCMAKE_CXX_FLAGS=-Wno-error=tsan
 
   nospin:
     runs-on: ubuntu-24.04

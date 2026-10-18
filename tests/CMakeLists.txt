@@ -158,6 +158,7 @@ target_link_libraries(test_sched_spawn PRIVATE corocc)
 add_test(NAME sched_spawn COMMAND test_sched_spawn)
 
 add_executable(test_sched_sleep unit/test_sched_sleep.c)
+target_include_directories(test_sched_sleep PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(test_sched_sleep PRIVATE corocc)
 add_test(NAME sched_sleep COMMAND test_sched_sleep)
 
@@ -246,6 +247,7 @@ add_executable(test_rt_mn unit/test_rt_mn.c)
     # first_done (report the first completion, scope stays alive: follow-up
     # wait or cancel is mandatory).
     add_executable(test_rt_scope_group unit/test_rt_scope_group.c)
+    target_include_directories(test_rt_scope_group PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(test_rt_scope_group PRIVATE corocc Threads::Threads)
     add_test(NAME rt_scope_group COMMAND test_rt_scope_group)
     set_tests_properties(rt_scope_group PROPERTIES TIMEOUT 120)

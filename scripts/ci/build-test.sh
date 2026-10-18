@@ -123,8 +123,7 @@ case "$MATRIX_ENV" in
     nospin)  [ -n "$EXP_REG" ] || EXP_REG="48|49"; [ -n "$EXP_EXE" ] || EXP_EXE="47|48" ;;
     asan)    [ -n "$EXP_REG" ] || EXP_REG="46|47"; [ -n "$EXP_EXE" ] || EXP_EXE="43|44" ;;
     windows) [ -n "$EXP_REG" ] || EXP_REG="45";    [ -n "$EXP_EXE" ] || EXP_EXE="45" ;;
-    tsan)    [ -n "$EXP_REG" ] || EXP_REG="1";     [ -n "$EXP_EXE" ] || EXP_EXE="1"
-             [ "$INCLUDE_SET" -eq 1 ] || INCLUDE="tsan" ;;
+    tsan)    [ -n "$EXP_REG" ] || EXP_REG="47|48"; [ -n "$EXP_EXE" ] || EXP_EXE="46|47" ;;
     *) echo "build-test.sh: unknown --matrix-env '$MATRIX_ENV'" >&2; exit 2 ;;
 esac
 

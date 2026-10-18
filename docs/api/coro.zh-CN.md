@@ -230,6 +230,7 @@ yield(以及入口返回哨兵)会把控制权交还给驱动当前这一轮运�
 | `test_conc_double_resume` | 多线程出示同一凭证时至多一条执行流进入挂点,含固定种子 200 轮投递压测。 | 原生、ASan、aarch64/QEMU |
 | `test_conc_runtime_tsan` | 递送队列、身份注册表与原子操作在多线程并发下无数据竞争。 | ThreadSanitizer(CI) |
 
-ThreadSanitizer 无法跟踪汇编执行的切栈,故驱动路径本身不可插桩。并发验证因此拆为
-「可插桩部分」(投递队列、身份注册表与原子操作,由 TSan 套件覆盖)与「行为部分」
-(恰好一次认领、拒绝码、协程仍可驱动),后者在全部平台的常规套件中运行。
+ThreadSanitizer 通过 fiber 切换注解(`__tsan_create_fiber`/`__tsan_switch_to_fiber`,见
+`src/arch/coro_tsan.h`)跟踪汇编切栈,故驱动路径同样可插桩:递送队列、身份注册表、原子
+操作与协程驱动路径的整个并发面,均由 TSan 任务以无数据竞争的方式覆盖;此外「行为部分」
+(恰好一次认领、拒绝码、协程仍可驱动)在全部平台的常规套件中运行。

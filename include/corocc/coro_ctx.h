@@ -18,6 +18,25 @@
 #include "coro_stack.h"
 #include "coro_status.h"
 
+/*
+ * ThreadSanitizer instrumentation is active for this translation unit, so the
+ * private fiber field below is compiled in. GCC defines __SANITIZE_THREAD__
+ * under -fsanitize=thread; Clang defines only the __has_feature(thread_sanitizer)
+ * predicate, so both spellings are checked. When neither holds, the field is
+ * absent and a plain build's layout -- and its ABI -- stays byte-for-byte
+ * unchanged. (The internal coro_tsan.h repeats this detection so it can be
+ * included on its own.)
+ */
+#ifndef COROCC_TSAN
+#  if defined(__SANITIZE_THREAD__)
+#    define COROCC_TSAN 1
+#  elif defined(__has_feature)
+#    if __has_feature(thread_sanitizer)
+#      define COROCC_TSAN 1
+#    endif
+#  endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +60,13 @@ typedef struct coro_ctx {
                                     over at a switch into this context; only
                                     meaningful when the implementation is built
                                     with COROCC_ASAN, otherwise unused. */
+#if defined(COROCC_TSAN)
+    void*             tsan_fiber; /* PRIVATE: this context's TSan fiber handle.
+                                    Present only when the translation unit is
+                                    instrumented with ThreadSanitizer, so a
+                                    plain build's layout -- and therefore its
+                                    ABI -- is byte-for-byte unchanged. */
+#endif
 } coro_ctx;
 
 /**

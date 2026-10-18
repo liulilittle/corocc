@@ -183,16 +183,26 @@ void coro_runtime_signal_work(coro_runtime* r) {
     if (r) coro_wait_raise(&r->work);
 }
 
-void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline) {
+void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline,
+                                  int (*ready)(void* ctx), void* ctx) {
     if (!r) return;
-    /* Reset first, then look: a signal raised before the reset is covered by
-       the queue being non-empty, and one raised after the check still sets the
-       signal, so the wait cannot miss a request. */
+    /* Reset first, then look. A signal raised before the reset is covered by
+       the queue being non-empty or by the caller's readiness predicate, and one
+       raised after the check still sets the signal, so the block cannot miss a
+       request. The predicate closes the non-delivery window: a cross-thread
+       cancel that only signals work (no delivery) and lands before the reset
+       would otherwise be erased by it, but the cancel's own flag -- read by the
+       predicate after the reset -- keeps the wait from blocking. Ordering, with
+       R = reset, S = the cancel's store+raise, C = the block decision:
+         S < R   : R erases the raise; the predicate sees the flag and skips C.
+         R < S < C: the raise is pending and the predicate also sees the flag.
+         S > C   : the raise lands after C, which then observes the event.
+       So no cancel loses its immediate wakeup. */
     coro_wait_reset(&r->work);
     coro_plat_mutex_lock(&r->lock);
     int empty = (q_load(&r->head) == NULL);
     coro_plat_mutex_unlock(&r->lock);
-    if (empty) coro_wait_block_until(&r->work, deadline);
+    if (empty && !(ready && ready(ctx))) coro_wait_block_until(&r->work, deadline);
 }
 
 coro_runtime* coro_runtime_by_id(uint64_t id) {

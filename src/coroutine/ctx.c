@@ -24,6 +24,8 @@
 #include <corocc/coro_ctx.h>
 
 #include "arch/fcontext.h"
+#include "arch/coro_tsan.h"
+#include "arch/coro_tls.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -36,6 +38,37 @@ void __sanitizer_finish_switch_fiber(void* fake_stack_save,
                                      const void** bottom_old,
                                      size_t* size_old);
 #endif
+
+#if defined(COROCC_TSAN)
+/* The fiber this thread's own (non-coroutine) code runs on. The driver context
+   in coro.c carries no fiber of its own, so a switch that returns to the thread
+   resolves to this handle. It is captured on the first swap this thread makes:
+   no coroutine can be running before the first swap *into* one, so the first
+   swap is always the thread's own code handing control away, which is exactly
+   the moment the calling thread is on its own fiber. */
+static CORO_TLS void* tsan_thread_fiber;
+
+/* The fiber a context runs on: its own handle for a coroutine, this thread's
+   handle for a driver/uninitialised context. */
+static void* coro_ctx_tsan_fiber(const coro_ctx* cx) {
+    return cx->tsan_fiber ? cx->tsan_fiber : tsan_thread_fiber;
+}
+
+/* Announce the switch from `from` to `to` before the assembly jump, so TSan
+   attributes the code that will run to the right fiber. */
+static void coro_ctx_tsan_switch(coro_ctx* from, coro_ctx* to) {
+    void* cur = coro_tsan_current_fiber();
+    if (!tsan_thread_fiber) tsan_thread_fiber = cur;
+    /* Record the fiber `from` is running on. This is the context the caller is
+       suspended in, and the L0 contract lets the caller pass a context it
+       never initialised (its fields are only written, then read); recording
+       the value here is what gives such a context a valid fiber for the jump
+       home that the entry-return trampoline performs. */
+    from->tsan_fiber = cur;
+    void* dst = to->tsan_fiber ? to->tsan_fiber : tsan_thread_fiber;
+    coro_tsan_switch_to_fiber(dst);
+}
+#endif /* COROCC_TSAN */
 
 /* Entry trampoline: runs the user entry function; when it returns, switches
    to the sentinel (resumer) context. Never reaches Boost's `_exit`. */
@@ -65,6 +98,11 @@ static void ctx_trampoline(coro_transfer t) {
         cx->back->asan_fake = fake;
     }
 #endif
+#if defined(COROCC_TSAN)
+    /* The entry returned: the coroutine's fiber is done, so announce the jump
+       back to the resumer's fiber (this is the second raw asm_jump site). */
+    coro_tsan_switch_to_fiber(coro_ctx_tsan_fiber(cx->back));
+#endif
     corocc_asm_jump(cx->back->fctx, NULL);
 #if defined(_MSC_VER)
     __assume(0); /* unreachable */
@@ -92,6 +130,11 @@ int coro_ctx_init(coro_ctx* cx, const coro_stack* stk,
        portable spelling. */
     cx->fctx = corocc_asm_make((void*)hi, stk->usable, ctx_trampoline);
     cx->stack = stk;
+#if defined(COROCC_TSAN)
+    /* One fiber per context: TSan then follows this coroutine's stack across
+       the assembly switches instead of blaming the OS thread that runs it. */
+    cx->tsan_fiber = coro_tsan_create_fiber();
+#endif
     return CORO_OK;
 }
 
@@ -112,6 +155,10 @@ void coro_ctx_swap(coro_ctx* from, coro_ctx* to) {
         to->stack ? to->stack->lo : NULL,
         to->stack ? to->stack->usable : 0);
     to->asan_fake = fake;
+#endif
+#if defined(COROCC_TSAN)
+    /* Announce the transfer to the target fiber before the jump. */
+    coro_ctx_tsan_switch(from, to);
 #endif
     coro_transfer tr = corocc_asm_jump(to->fctx, to);
     /* We are running again, so some context resumed us. tr.fctx is that
@@ -135,5 +182,12 @@ void coro_ctx_swap(coro_ctx* from, coro_ctx* to) {
 }
 
 void coro_ctx_destroy(coro_ctx* cx) {
-    if (cx) memset(cx, 0, sizeof *cx);
+    if (!cx) return;
+#if defined(COROCC_TSAN)
+    /* The context will not be swapped into again (destroy precondition), so
+       its fiber can be retired. A driver/never-initialised context has no
+       fiber; coro_tsan_destroy_fiber accepts NULL. */
+    coro_tsan_destroy_fiber(cx->tsan_fiber);
+#endif
+    memset(cx, 0, sizeof *cx);
 }

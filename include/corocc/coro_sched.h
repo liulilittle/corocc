@@ -165,20 +165,17 @@ COROCC_API coro_status coro_sched_wait_all(coro_sched_t* s);
  * coro_sched_cancel -- ask a coroutine on this scheduler to stop.
  *
  * The coroutine observes the request at its next safe point, exactly as
- * coro_cancel documents. If it is sleeping, its deadline is removed and it is
- * requeued so that safe point is reached now instead of at the deadline.
+ * coro_cancel documents. If it is sleeping, the loop's thread finds its
+ * deadline itself, removes it and requeues the coroutine so that safe point is
+ * reached now instead of at the deadline. A coroutine parked on a join is left
+ * to its releaser, which is its normal wakeup path.
  *
- * The handle must stay valid for the whole call. A scheduler-owned coroutine
- * is released the instant it finishes and the scheduler retires it; the
- * scheduler's bookkeeping node and the coroutine object live and die together
- * (the retire and lost-claim paths destroy the coroutine and then free the
- * node in the same place), so the handle's lifetime is also the node's. If the
- * coroutine may finish concurrently with this call, the caller must
- * synchronize -- join it first, or otherwise guarantee under its own lock that
- * it cannot be released concurrently. Calling with a handle that may be freed
- * underneath is undefined behavior and may touch freed scheduler state. This
- * is the same lifetime requirement coro_sched_spawn_h states for the handle it
- * returns.
+ * Any thread may call this. The request crosses threads as a pending flag plus
+ * a work signal only: this call never passes a scheduler node pointer (or any
+ * other scheduler bookkeeping) to another thread, so it cannot touch a node
+ * the loop's thread is concurrently retiring. The only lifetime requirement is
+ * that the handle stays valid for the duration of the call -- the same
+ * requirement coro_sched_spawn_h states for the handle it returns.
  *
  * @param s  Scheduler that owns the coroutine.
  * @param c  Coroutine to cancel.

@@ -829,13 +829,26 @@ static void ch_wake_all_locked(rt_node* head) {
     }
 }
 
+/* ch->len is a size_t that is mutated under the activity lock but also read
+   locklessly by coro_rt_channel_size, so *every* access goes through the
+   pointer-width atomics: a mixed atomic/non-atomic pair on one address is a
+   C11 data race even when only one side writes. coro_atp_* is size_t-wide on
+   both ILP32 and LP64, so this never has the 8-byte-on-4 corruption a uint64_t
+   access would. */
+static size_t ch_len(const coro_rt_channel_t* c) {
+    return (size_t)coro_atp_load((const volatile uintptr_t*)&c->len);
+}
+static void ch_len_set(coro_rt_channel_t* c, size_t v) {
+    coro_atp_store((volatile uintptr_t*)&c->len, (uintptr_t)v);
+}
+
 static int ch_is_unbounded(const coro_rt_channel_t* c) {
     return c->limit == 0;
 }
 
 /* Room for one more item? (unbounded channels always have room) */
 static int ch_has_room(const coro_rt_channel_t* c) {
-    return ch_is_unbounded(c) || c->len < c->limit;
+    return ch_is_unbounded(c) || ch_len(c) < c->limit;
 }
 
 /* Grow the ring to at least `want` slots, preserving the FIFO order.
@@ -850,12 +863,12 @@ static int ch_grow(coro_rt_channel_t* c, size_t want) {
     if (!slots) return -1;
     /* Compact: the ring may be wrapped, so the open slot index is not simply
        c->head + c->len when it exceeds the old capacity. Layout in order. */
-    if (c->len) {
-        void** tmp = (void**)malloc(c->len * sizeof(void*));
+    if (ch_len(c)) {
+        void** tmp = (void**)malloc(ch_len(c) * sizeof(void*));
         if (!tmp) { free(slots); return -1; }
-        for (size_t i = 0; i < c->len; ++i)
+        for (size_t i = 0; i < ch_len(c); ++i)
             tmp[i] = slots[(c->head + i) % c->cap];
-        for (size_t i = 0; i < c->len; ++i) slots[i] = tmp[i];
+        for (size_t i = 0; i < ch_len(c); ++i) slots[i] = tmp[i];
         free(tmp);
     }
     c->head = 0;
@@ -868,7 +881,7 @@ static coro_status ch_init(coro_rt_channel_t* ch, size_t cap) {
     free(ch->slots);
     ch->slots = NULL;
     ch->cap = 0;
-    ch->len = 0;
+    ch_len_set(ch, 0);
     ch->head = 0;
     ch->limit = cap;
     coro_at_store(&ch->closed, 0);
@@ -891,7 +904,7 @@ static void ch_reset(coro_rt_channel_t* ch) {
     free(ch->slots);
     ch->slots = NULL;
     ch->cap = 0;
-    ch->len = 0;
+    ch_len_set(ch, 0);
     ch->head = 0;
     ch->limit = 0;
     coro_at_store(&ch->closed, 0);
@@ -902,7 +915,7 @@ static void ch_reset(coro_rt_channel_t* ch) {
 coro_status coro_rt_channel_destroy(coro_rt_channel_t* ch) {
     if (!ch) return CORO_EINVAL;
     if (ch->sendq || ch->recvq) return CORO_EBUSY;   /* a waiter remains */
-    if (ch->len > 0) return CORO_EBUSY;              /* not drained */
+    if (ch_len(ch) > 0) return CORO_EBUSY;              /* not drained */
     ch_reset(ch);
     return CORO_OK;
 }
@@ -927,7 +940,7 @@ coro_status coro_rt_channel_close(coro_rt_t* rt, coro_rt_channel_t* ch) {
 size_t coro_rt_channel_size(const coro_rt_channel_t* ch) {
     /* len is a size_t, so it travels through the pointer-width atomic
        helpers: a 64-bit access would write 8 bytes over 4 on ILP32. */
-    return ch ? (size_t)coro_atp_load((const volatile uintptr_t*)&ch->len) : 0;
+    return ch ? ch_len(ch) : 0;
 }
 
 int coro_rt_channel_closed(const coro_rt_channel_t* ch) {
@@ -948,12 +961,12 @@ coro_status coro_rt_channel_trysend(coro_rt_t* rt, coro_rt_channel_t* ch,
         coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_EBUSY;
     }
-    if (ch_is_unbounded(ch) && ch->len == ch->cap && ch_grow(ch, ch->len + 1) != 0) {
+    if (ch_is_unbounded(ch) && ch_len(ch) == ch->cap && ch_grow(ch, ch_len(ch) + 1) != 0) {
         coro_plat_mutex_unlock(&rt->act_lock);
         return CORO_ENOMEM;
     }
-    ch->slots[(ch->head + ch->len) % ch->cap] = v;
-    ++ch->len;
+    ch->slots[(ch->head + ch_len(ch)) % ch->cap] = v;
+    ch_len_set(ch, ch_len(ch) + 1);
     rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
     if (r) (void)rt_node_wake_locked(r);
     coro_plat_mutex_unlock(&rt->act_lock);
@@ -980,15 +993,15 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
         }
         int roomed = 0;
         if (ch_has_room(ch)) {
-            if (ch_is_unbounded(ch) && ch->len == ch->cap && ch_grow(ch, ch->len + 1) != 0) {
+            if (ch_is_unbounded(ch) && ch_len(ch) == ch->cap && ch_grow(ch, ch_len(ch) + 1) != 0) {
                 coro_plat_mutex_unlock(&rt->act_lock);
                 return CORO_ENOMEM;
             }
             roomed = 1;
         }
         if (roomed) {
-            ch->slots[(ch->head + ch->len) % ch->cap] = v;
-            ++ch->len;
+            ch->slots[(ch->head + ch_len(ch)) % ch->cap] = v;
+            ch_len_set(ch, ch_len(ch) + 1);
             rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
             if (r) (void)rt_node_wake_locked(r);
             coro_plat_mutex_unlock(&rt->act_lock);
@@ -1008,12 +1021,12 @@ coro_status coro_rt_channel_send(coro_rt_t* rt, coro_rt_channel_t* ch, void* v) 
             node_clear(self, RT_WAITING);
             int room = !coro_at_load(&ch->closed) && ch_has_room(ch);
             if (room) {
-                if (ch_is_unbounded(ch) && ch->len == ch->cap && ch_grow(ch, ch->len + 1) != 0)
+                if (ch_is_unbounded(ch) && ch_len(ch) == ch->cap && ch_grow(ch, ch_len(ch) + 1) != 0)
                     room = 0;
             }
             if (room) {
-                ch->slots[(ch->head + ch->len) % ch->cap] = v;
-                ++ch->len;
+                ch->slots[(ch->head + ch_len(ch)) % ch->cap] = v;
+                ch_len_set(ch, ch_len(ch) + 1);
                 rt_node* r = (rt_node*)q_pop_wakeable(&ch->recvq);
                 if (r) (void)rt_node_wake_locked(r);
                 coro_plat_mutex_unlock(&rt->act_lock);
@@ -1034,10 +1047,10 @@ coro_status coro_rt_channel_tryrecv(coro_rt_t* rt, coro_rt_channel_t* ch,
                                     void** out) {
     if (!rt || !ch) return CORO_EINVAL;
     coro_plat_mutex_lock(&rt->act_lock);
-    if (ch->len > 0) {
+    if (ch_len(ch) > 0) {
         void* v = ch->slots[ch->head];
         ch->head = (ch->head + 1) % ch->cap;
-        --ch->len;
+        ch_len_set(ch, ch_len(ch) - 1);
         rt_node* s = (rt_node*)q_pop_wakeable(&ch->sendq);
         if (s) (void)rt_node_wake_locked(s);
         coro_plat_mutex_unlock(&rt->act_lock);
@@ -1065,10 +1078,10 @@ coro_status coro_rt_channel_recv(coro_rt_t* rt, coro_rt_channel_t* ch,
 
         /* Empty and open: park under the activity lock and re-check. */
         coro_plat_mutex_lock(&rt->act_lock);
-        if (ch->len > 0) {
+        if (ch_len(ch) > 0) {
             void* v = ch->slots[ch->head];
             ch->head = (ch->head + 1) % ch->cap;
-            --ch->len;
+            ch_len_set(ch, ch_len(ch) - 1);
             rt_node* s = (rt_node*)q_pop_wakeable(&ch->sendq);
             if (s) (void)rt_node_wake_locked(s);
             coro_plat_mutex_unlock(&rt->act_lock);

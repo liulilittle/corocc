@@ -1,4 +1,5 @@
 #include "../harness.h"
+#include "arch/coro_atomic.h"
 #include <corocc/coro.h>
 #include <corocc/coro_rt.h>
 #include <corocc/coro_sched.h>      /* coro_monotonic_ns */
@@ -44,7 +45,7 @@ struct delay_code {
    finished its 10ms one, so the first completion is always the ESTALE
    report, and a cancel can only ever cut a child that is inside a park. */
 static coro_rt_sem_t g_order_gate;
-static volatile int  g_first_reported;   /* set by the first child at report */
+static uint64_t      g_first_reported;   /* set by the first child at report */
 
 /* First child: the 10ms timer, reporting dc->code; releases the gate. */
 static coro_status gated_first_entry(void* arg) {
@@ -52,7 +53,7 @@ static coro_status gated_first_entry(void* arg) {
     coro_status st = coro_rt_sleep(g_rt,
                         coro_monotonic_ns() + (uint64_t)dc->ms * 1000000ull);
     if (st != CORO_OK) return st;
-    g_first_reported = 1;
+    coro_at_store(&g_first_reported, 1);
     (void)coro_rt_sem_post(g_rt, &g_order_gate);
     return dc->code;
 }
@@ -100,7 +101,7 @@ struct fdone_scene {
     coro_rt_scope_t*    s;
     coro_status         first;         /* out */
     unsigned long long  elapsed_ns;    /* out */
-    volatile int        waiter_done;   /* out: the waiter returned */
+    uint64_t            waiter_done;   /* out: the waiter returned (atomic) */
     int                 followup;      /* 1: drain afterwards */
     coro_status         after;         /* out: the follow-up wait */
 };
@@ -110,7 +111,8 @@ static void first_done_waiter(void* arg) {
     uint64_t t0 = coro_monotonic_ns();
     (void)coro_rt_group_wait_first_done(g_rt, sc->s, &sc->first);
     sc->elapsed_ns = (unsigned long long)(coro_monotonic_ns() - t0);
-    sc->waiter_done = 1;
+    /* Release: publishes first/elapsed_ns to the poller's acquire load below. */
+    coro_at_store(&sc->waiter_done, 1);
     if (sc->followup) sc->after = coro_rt_scope_wait(g_rt, sc->s);
 }
 
@@ -154,7 +156,7 @@ static void run_tests(void) {
         memset(&sc, 0, sizeof sc);
         sc.s = &s;
         coro_rt_sem_init(&g_order_gate, 0);
-        g_first_reported = 0;
+        coro_at_store(&g_first_reported, 0);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   &cfast) == CORO_OK);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
@@ -195,7 +197,7 @@ static void run_tests(void) {
         memset(&sc, 0, sizeof sc);
         sc.s = &s;
         coro_rt_sem_init(&g_order_gate, 0);
-        g_first_reported = 0;
+        coro_at_store(&g_first_reported, 0);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   NULL) == CORO_OK);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
@@ -210,12 +212,12 @@ static void run_tests(void) {
            bound below anchors. */
         {
             unsigned spins = 0;
-            while (!sc.waiter_done && spins < 5000u) {
+            while (!coro_at_load(&sc.waiter_done) && spins < 5000u) {
                 sleep_ms(1);
                 ++spins;
             }
         }
-        CHECK(sc.waiter_done == 1);
+        CHECK(coro_at_load(&sc.waiter_done) == 1);
         CHECK(sc.first == CORO_ESTALE);         /* the first completion */
         CHECK(sc.elapsed_ns < 300000000ull);
         /* No follow-up yet: the scope is still live -- destroy detects it
@@ -242,7 +244,7 @@ static void run_tests(void) {
         sc.s = &s;
         sc.followup = 1;
         coro_rt_sem_init(&g_order_gate, 0);
-        g_first_reported = 0;
+        coro_at_store(&g_first_reported, 0);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_first_entry, &fast,
                                   &cfast) == CORO_OK);
         CHECK(coro_rt_scope_spawn(rt, &s, NULL, gated_second_entry, &slow,
@@ -254,12 +256,12 @@ static void run_tests(void) {
            (reproduced with a SIGSTOP across the 10ms deadline). */
         {
             unsigned spins = 0;
-            while (!g_first_reported && spins < 5000u) {
+            while (!coro_at_load(&g_first_reported) && spins < 5000u) {
                 sleep_ms(1);
                 ++spins;
             }
         }
-        CHECK(g_first_reported == 1);
+        CHECK(coro_at_load(&g_first_reported) == 1);
         CHECK(coro_rt_scope_cancel(rt, &s) == CORO_OK);   /* cut the slow */
         CHECK(coro_rt_wait_all(rt) == CORO_OK);
         CHECK(sc.first == CORO_ESTALE);

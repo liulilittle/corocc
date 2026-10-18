@@ -121,31 +121,6 @@ static void sched_make_runnable(coro_sched_t* s, sched_node* n) {
     sched_enqueue(s, n);
 }
 
-/* Unlink a node from the owner's wake list before it leaves the scheduler's
-   ownership (a retire or a lost claim frees it). Runs on the owner thread
-   under wake_lock, mutually exclusive with sched_drain_wakes' pop. The tail
-   is rolled back to its predecessor when the removed node was the tail, so
-   wake_tail never dangles. Idempotent: a node not on the list is untouched. */
-static void sched_wake_unlink(coro_sched_t* s, sched_node* n) {
-    coro_plat_mutex_lock(&s->wake_lock);
-    if (n->wake_pending) {
-        sched_node** p = &s->wake_head;
-        sched_node* prev = NULL;
-        while (*p) {
-            if (*p == n) {
-                *p = n->wake_next;
-                if (s->wake_tail == n) s->wake_tail = prev;
-                break;
-            }
-            prev = *p;
-            p = &(*p)->wake_next;
-        }
-        n->wake_next = NULL;
-        n->wake_pending = 0;
-    }
-    coro_plat_mutex_unlock(&s->wake_lock);
-}
-
 /* Drive a node to its next park (or its end). The first turn of a coroutine
    starts it: the credential that claims a never-started coroutine is the
    implicit "never started" one, which coro_resume rejects as invalid. */
@@ -195,10 +170,6 @@ static void retire_node(coro_sched_t* s, sched_node* n) {
     }
     n->done = 1;
     index_drop(s, n);
-    /* A cancel may have filed a wake request for this node while it was
-       running (the request outlives the drive): take it off the wake list
-       before the node is freed, or the next drain would pop freed memory. */
-    sched_wake_unlink(s, n);
     coro_destroy(n->coro);
     free(n);
 }
@@ -293,76 +264,62 @@ coro_status sched_sleep(coro_sched_t* s, uint64_t deadline) {
     return st;
 }
 
-void sched_wake_request(coro_sched_t* s, sched_node* n) {
-    if (!s || !n) return;
-    /* Only a parked node (sleeping on a deadline, or waiting on a join) needs
-       a wake request: a running or already-runnable node observes the
-       cancellation at its next safe point on its own, and filing a request for
-       it would only leave a stale wake-list entry to be discarded. waiting is
-       read atomically -- it is written by the owner. */
-    if (coro_at_load(&n->waiting) == 0) return;
-    /* Cross-thread entry point: it must not touch the run queue or the timer
-       heap (the owner writes them without a common lock). It only appends the
-       node to the owner-private wake list, de-duplicating a node already
-       queued, and signals the loop -- which then does the removal and requeue
-       on its own thread. */
-    coro_plat_mutex_lock(&s->wake_lock);
-    if (!n->wake_pending) {
-        n->wake_pending = 1;
-        n->wake_next = NULL;
-        if (s->wake_tail) {
-            s->wake_tail->wake_next = n;
-        } else {
-            s->wake_head = n;
-        }
-        s->wake_tail = n;
-    }
-    coro_plat_mutex_unlock(&s->wake_lock);
-    /* The run loop may be sleeping until this deadline; the deadline is about
-       to be cancelled, so wake the thread that runs the loop. The runtime
-       pointer is read through the pointer-width atomic helpers because it is
-       published by the owner (coro_sched_run) and read here from any thread. */
-    coro_runtime_signal_work(
-        (coro_runtime*)coro_atp_load((const volatile uintptr_t*)&s->rt));
-}
-
-void sched_drain_wakes(coro_sched_t* s) {
+/* Owner-side half of a cross-thread cancellation. A cancel only raises a flag
+   on the scheduler and signals the loop; the loop then runs this pass, which is
+   the only place the timer heap and the run queue are touched. Every sleeper
+   whose coroutine has a cancellation outstanding has its deadline removed and
+   is requeued, so the coroutine reaches its safe point now instead of at the
+   deadline. No node pointer is ever carried across threads -- the pass finds
+   the nodes itself, from the heap the owner alone writes.
+ *
+ * A node whose deadline already left the heap, or one parked on a join chain
+ * (never in the heap), is left alone: it is either runnable already or stays
+ * parked for its own releaser, exactly as before. Removal reorders the heap, so
+ * the scan restarts after each removal instead of iterating a changing array;
+ * coro_timer_heap_remove refusing a node (it is not in this heap) is treated as
+ * the harmless no-op it is. */
+static void sched_wake_cancelled(coro_sched_t* s) {
+    coro_plat_mutex_lock(&s->timer_lock);
     for (;;) {
-        sched_node* n;
-        coro_plat_mutex_lock(&s->wake_lock);
-        n = s->wake_head;
-        if (n) {
-            s->wake_head = n->wake_next;
-            if (!s->wake_head) s->wake_tail = NULL;
-            n->wake_next = NULL;
-            n->wake_pending = 0;
+        sched_node* victim = NULL;
+        size_t count = coro_timer_heap_count(&s->sleepers);
+        for (size_t i = 0; i < count; ++i) {
+            coro_timer_node* t = coro_timer_heap_at(&s->sleepers, i);
+            sched_node* n = (sched_node*)(void*)
+                ((char*)t - offsetof(sched_node, timer));
+            if (coro_cancel_pending(n->coro)) { victim = n; break; }
         }
-        coro_plat_mutex_unlock(&s->wake_lock);
-        if (!n) return;
-
-        /* Owner side: remove the deadline (if any) and requeue. Removal
-           refuses a node that is not in the heap, which is exactly the state
-           of a node whose deadline already fired, one already requeued, or one
-           parked on a join chain: such a node is either runnable already or
-           stays parked for its own releaser, and is left untouched. */
-        coro_plat_mutex_lock(&s->timer_lock);
-        if (coro_timer_heap_remove(&s->sleepers, &n->timer) == 0) {
-            sched_make_runnable(s, n);
-        }
-        coro_plat_mutex_unlock(&s->timer_lock);
+        if (!victim) break;
+        if (coro_timer_heap_remove(&s->sleepers, &victim->timer) != 0) break;
+        sched_make_runnable(s, victim);
     }
+    coro_plat_mutex_unlock(&s->timer_lock);
 }
 
 coro_status coro_sched_cancel(coro_sched_t* s, coro_t* c) {
     if (!s || !c) return CORO_EINVAL;
-    sched_node* n = sched_node_of(c);
-    if (!n) return CORO_EINVAL;
+    /* The ownership check reads only the handle's tag slot; it never keeps or
+       dereferences the scheduler's bookkeeping node, so no node pointer is
+       passed across threads. A foreign handle has no tag and is refused, the
+       same as before. */
+    if (!coro_get_sched_tag(c)) return CORO_EINVAL;
     /* The request lands where any other cancellation lands; the coroutine
        observes it at its next safe point. If it is asleep, the loop's thread
-       takes its deadline out of the heap and requeues it so that safe point
-       comes now; this thread only files the request. */
+       finds the node itself by rescanning the timer heap and requeues it so
+       that safe point comes now. This thread only files the request: it raises
+       the pending flag and signals the loop. Nothing addressed to a node
+       crosses threads, so a concurrent retire cannot leave this call touching
+       freed memory. */
     coro_status st = coro_cancel(c);
-    if (st == CORO_OK) sched_wake_request(s, n);
+    if (st == CORO_OK) {
+        coro_at_store(&s->cancel_pending, 1);
+        /* The run loop may be sleeping until a deadline; wake its thread. The
+           runtime pointer is read through the pointer-width atomic helpers
+           because it is published by the owner (coro_sched_run) and read here
+           from any thread. */
+        coro_runtime_signal_work(
+            (coro_runtime*)coro_atp_load((const volatile uintptr_t*)&s->rt));
+    }
     return st;
 }
 
@@ -377,10 +334,20 @@ coro_sched_t* coro_sched_create(void) {
 #if !defined(_WIN32)
     /* SRWLOCK (Windows) is ready zero-initialized; POSIX needs the init. */
     pthread_mutex_init(&s->timer_lock, NULL);
-    pthread_mutex_init(&s->wake_lock, NULL);
 #endif
     coro_timer_heap_init(&s->sleepers);
     return s;
+}
+
+/* Readiness predicate for the idle wait. A cancel may have signalled work
+   without enqueuing a delivery, and that signal can race the wait's reset (the
+   store+raise lands before the reset and is erased by it); this predicate lets
+   the wait observe the pending flag after the reset, so a cancelled sleeper is
+   not stranded until its deadline. Only this thread consumes the flag, so it is
+   monotone for the duration of the wait. */
+static int sched_cancel_ready(void* ctx) {
+    const coro_sched_t* s = (const coro_sched_t*)ctx;
+    return coro_at_load(&s->cancel_pending) != 0;
 }
 
 coro_status coro_sched_run(coro_sched_t* s) {
@@ -397,8 +364,9 @@ coro_status coro_sched_run(coro_sched_t* s) {
 
         /* Cross-thread cancellation requests are served here too, on the
            owner thread, so the run queue and the timer heap stay
-           single-writer. */
-        sched_drain_wakes(s);
+           single-writer. The flag is consumed with one exchange: a cancel that
+           lands after it leaves the flag set for the next turn. */
+        if (coro_at_exchange(&s->cancel_pending, 0)) sched_wake_cancelled(s);
 
         sched_collect_expired(s);
 
@@ -424,10 +392,8 @@ coro_status coro_sched_run(coro_sched_t* s) {
                 }
             } else {
                 /* The claim was lost -- the coroutine was cancelled or driven
-                   elsewhere. It is no longer ours to park. Drop any pending
-                   wake request before the node is freed. */
+                   elsewhere. It is no longer ours to park. */
                 index_drop(s, n);
-                sched_wake_unlink(s, n);
                 coro_destroy(n->coro);
                 free(n);
             }
@@ -442,7 +408,8 @@ coro_status coro_sched_run(coro_sched_t* s) {
         t = coro_timer_heap_top(&s->sleepers);
         coro_plat_mutex_unlock(&s->timer_lock);
         if (t) {
-            coro_runtime_wait_work_until(s->rt, t->deadline);
+            coro_runtime_wait_work_until(s->rt, t->deadline,
+                                         sched_cancel_ready, s);
             continue;
         }
         return CORO_OK;

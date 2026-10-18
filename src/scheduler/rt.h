@@ -178,7 +178,12 @@ struct coro_rt {
     uint64_t        live;         /**< coroutines not yet finished (retired); a
                                        finished retained handle no longer
                                        counts (atomic). */
-    size_t          spawn_seq;    /**< round-robin spawn distribution. */
+    uint64_t        spawn_seq;    /**< round-robin spawn distribution; a
+                                       uint64_t so the cross-thread atomic add
+                                       keeps the access one aligned 8-byte word
+                                       on ILP32 too (a size_t there is 4 bytes
+                                       and a 64-bit RMW would clobber cache_lock
+                                       right after it). */
     coro_plat_mutex_t cache_lock; /**< guards the stack reclaim pool below. */
     coro_stack      cache[COROCC_RT_STACK_CACHE_MAX]; /**< parked stacks. */
     size_t          cache_n;      /**< parked entries in use. */

@@ -60,7 +60,7 @@ Boost coexistence suite when Boost is installed on the host.
 | `native` | 44 or 45 | 43 or 44 | 45/44 when the Boost coexist suite is present. |
 | `nospin` | 45 or 46 | 44 or 45 | `COROCC_PROBE_NOSPIN=ON` (+1). |
 | `asan` | 43 or 44 | 40 or 41 | `COROCC_ASAN=ON`; the three misuse-detection suites (`coro_exactlyonce`, `coro_crossresume`, `conc_double_resume`) are excluded because the sanitizer intercepts their abort path; perf suites are not registered. |
-| `tsan` | 1 | 1 | `COROCC_TSAN=ON` plus `-Wno-error=tsan` (gcc's `-Wtsan` warning on `__atomic_thread_fence` is not an error); runs only the `-R tsan` suite (`conc_runtime_tsan`). |
+| `tsan` | 47 | 46 | `COROCC_TSAN=ON` plus `-Wno-error=tsan` (gcc's `-Wtsan` warning on `__atomic_thread_fence` is not an error); runs the full ctest population (`cpp_perf` excluded). |
 | `windows` | 42 | 42 | MSVC Release; `cpp_perf` excluded. |
 
 Without `--matrix-env`, the floors come from `ci/site-matrix.env` (the same

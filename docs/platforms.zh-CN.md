@@ -103,7 +103,7 @@ macOS 平台注记:Darwin 没有 `pthread_condattr_setclock`,条件变量垫片�
 | 构建 | 开关 | 范围 | 说明 |
 | --- | --- | --- | --- |
 | AddressSanitizer | `-DCOROCC_ASAN=ON` | 每次上下文切换前后的 fiber 切换钩子(`__sanitizer_start_switch_fiber`/`finish_switch_fiber`),含栈用后即返回检测。功能套件在消毒器下运行;三个误用检测套件(`coro_exactlyonce`、`coro_crossresume`、`conc_double_resume`)被排除,因为消毒器会拦截它们故意触发的 abort 路径;该配置也不注册性能套件。 | Linux CI 任务;构建选项同时支持 MSVC `/fsanitize=address`。 |
-| ThreadSanitizer | `-DCOROCC_TSAN=ON` | 运行时的投递队列、身份注册表与原子操作,由 `conc_runtime_tsan` 套件执行。 | TSan 无法跟踪汇编切栈,驱动路径本身不可插桩;验证如何拆分见 [coro.zh-CN.md](api/coro.zh-CN.md)。Linux CI 任务;gcc 对 `__atomic_thread_fence` 的 `-Wtsan` 警告被豁免(不作为错误)。 |
+| ThreadSanitizer | `-DCOROCC_TSAN=ON` | 每次上下文切换前后的 fiber 切换注解(`__tsan_create_fiber`/`__tsan_switch_to_fiber`,见 `src/arch/coro_tsan.h`),使 TSan 可跟踪汇编切栈。全量测试套件在消毒器下无数据竞争运行。 | Linux CI 任务;gcc 对 `__atomic_thread_fence` 的 `-Wtsan` 警告被豁免(不作为错误)。 |
 | 零自旋探针 | `-DCOROCC_PROBE_NOSPIN=ON` | 统计 compare-and-swap 尝试次数,使零自旋契约可被 `coro_nospin` 套件断言。 | Linux CI 任务。 |
 
 ASan 与 TSan 不能在同一构建中共存;二者都在 CI 的 Linux x86-64 上构建并

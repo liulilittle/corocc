@@ -153,6 +153,19 @@ static int rt_queue_claim(rt_node* n) {
     }
 }
 
+/* rt_node.worker is written by the worker that drives the node (a steal may
+   migrate it) and read by cross-thread callers (cancel, wake, sleep) that must
+   route a wake to its inbox. The access is a single machine word, so it goes
+   through the pointer-width atomics: no torn pointer, no data race, and a
+   stale read stays inside the existing "a stale delivery is re-routed by the
+   owner" contract. */
+static rt_worker* node_worker(const rt_node* n) {
+    return (rt_worker*)coro_atp_load((const volatile uintptr_t*)&n->worker);
+}
+static void node_set_worker(rt_node* n, rt_worker* w) {
+    coro_atp_store((volatile uintptr_t*)&n->worker, (uintptr_t)w);
+}
+
 /* BT: deliver a collapsed wake's pending drive (B' minimal state machine:
    PENDING means one drive is owed to the flow; the park publication is the
    deliverer). Claim the delivery slot FIRST and clear PENDING only when the
@@ -165,7 +178,7 @@ int rt_pending_requeue(rt_node* n) {
     if (!node_test(n, RT_WAKE_PENDING)) return 0;
     if (!rt_queue_claim(n)) return 0;   /* still owed: keep PENDING */
     node_clear(n, RT_WAKE_PENDING);
-    mpsc_push(&n->worker->inbox, n);
+    mpsc_push(&node_worker(n)->inbox, n);
     return 1;
 }
 
@@ -242,7 +255,7 @@ int rt_node_wake_locked(rt_node* n) {
                         cur & ~(uint64_t)RT_WAITING)) {
             if (rt_queue_claim(n)) {
                 node_clear(n, RT_WAKE_PENDING);
-                mpsc_push(&n->worker->inbox, n);
+                mpsc_push(&node_worker(n)->inbox, n);
             } else {
                 node_set(n, RT_WAKE_PENDING);
             }
@@ -431,7 +444,7 @@ static void retire_node(coro_rt_t* rt, rt_node* n) {
        in a deque: a routed entry is consumed by the claim that drives the
        node, and this worker is the one driving it now. */
     while (node_test(n, RT_QUEUED)) {
-        drain_inbox(n->worker);
+        drain_inbox(node_worker(n));
         if (node_test(n, RT_QUEUED)) rt_cpu_relax();
     }
     coro_plat_mutex_lock(&rt->act_lock);
@@ -495,7 +508,7 @@ size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
                delivery reference; a dying/dead node is never driven. */
             node_clear(n, RT_QUEUED);
             if (node_test(n, RT_DYING | RT_DONE)) continue;
-            n->worker = w;
+            node_set_worker(n, w);
             w->running = n;
             st = rt_claim(n, &next);
             if (st == CORO_OK) {
@@ -558,7 +571,7 @@ size_t rt_run_some(coro_rt_t* rt, rt_worker* w, size_t budget) {
                    the claim and purged by the retire drain. */
                 node_clear(n, RT_WAKE_PENDING);
                 if (rt_queue_claim(n)) {
-                    mpsc_push(&n->worker->inbox, n);
+                    mpsc_push(&node_worker(n)->inbox, n);
                     signal_activity(rt);
                 }
             }
@@ -846,7 +859,7 @@ coro_rt_t* coro_rt_create(size_t nthreads) {
    pump context in LOOP mode. */
 static rt_worker* spawn_worker(coro_rt_t* rt) {
     if (rt->drv_kind == RT_DRV_LOOP) return &rt->workers[0];
-    size_t i = rt->spawn_seq++ % rt->nworkers;
+    size_t i = (size_t)coro_at_fetch_add((volatile uint64_t*)&rt->spawn_seq, 1) % rt->nworkers;
     return &rt->workers[i];
 }
 
@@ -878,9 +891,9 @@ static coro_status rt_spawn_common(coro_rt_t* rt, const coro_attr_t* attr,
     coro_set_sched_tag(n->coro, n);
     n->tok = CORO_TOKEN_NONE;
     n->flags = retained ? RT_RETAINED : 0;
-    n->worker = spawn_worker(rt);
+    node_set_worker(n, spawn_worker(rt));
     live_add(rt, 1);
-    if (rt_queue_claim(n)) mpsc_push(&n->worker->inbox, n);
+    if (rt_queue_claim(n)) mpsc_push(&node_worker(n)->inbox, n);
     signal_activity(rt);
 
     if (out) *out = n->coro;
@@ -1058,7 +1071,7 @@ coro_status coro_rt_sleep(coro_rt_t* rt, uint64_t deadline) {
        grow (OOM) the node is not scheduled: report ENOMEM and do not park, so
        the coroutine keeps running instead of sleeping forever with no timer. */
     {
-        rt_worker* owner = n->worker;
+        rt_worker* owner = node_worker(n);
         sleepers_lock(owner);
         int armed = coro_timer_heap_push(&owner->sleepers, &n->timer) == 0;
         sleepers_unlock(owner);
@@ -1127,7 +1140,7 @@ coro_status coro_rt_cancel(coro_rt_t* rt, coro_t* c) {
         if (coro_at_cas((volatile uint64_t*)&n->flags, &exp,
                         cur | RT_WAKE_REQ)) {
             if (rt_queue_claim(n)) {
-                mpsc_push(&n->worker->inbox, n);
+                mpsc_push(&node_worker(n)->inbox, n);
                 signal_activity(rt);
             } else {
                 node_clear(n, RT_WAKE_REQ); /* live delivery absorbs it */

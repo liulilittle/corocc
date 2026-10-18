@@ -116,17 +116,28 @@ void coro_runtime_wait_work(coro_runtime* r);
 void coro_runtime_signal_work(coro_runtime* r);
 
 /**
- * coro_runtime_wait_work_until -- sleep until a delivery is queued or a
- * deadline passes.
+ * coro_runtime_wait_work_until -- sleep until a delivery is queued, a deadline
+ * passes, or a caller-supplied readiness predicate is already true.
  *
  * The scheduler's idle wait: it sleeps instead of polling, wakes as soon as
- * work arrives, and wakes at the deadline so a timer can fire on time. Same
- * reset-then-check ordering as coro_runtime_wait_work, so no wakeup is lost.
+ * work arrives, and wakes at the deadline so a timer can fire on time.
+ *
+ * A cross-thread wakeup that is NOT a delivery -- the scheduler's cancel sets a
+ * flag and signals work without enqueuing anything -- can race the reset: if
+ * its signal lands before the reset it is cleared, and the queue check then
+ * sees nothing, so a plain reset-then-check would block until the deadline even
+ * though work is pending. The optional `ready` predicate is therefore evaluated
+ * AFTER the reset too: when it reports an existing readiness condition the call
+ * returns without blocking. The predicate runs on the waiting thread and must
+ * be safe to call there.
  *
  * @param r         Runtime to wait on.
  * @param deadline  Absolute monotone nanoseconds, as coro_monotonic_ns reports.
+ * @param ready     Optional readiness predicate, or NULL.
+ * @param ctx       Opaque argument forwarded to `ready`.
  */
-void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline);
+void coro_runtime_wait_work_until(coro_runtime* r, uint64_t deadline,
+                                  int (*ready)(void* ctx), void* ctx);
 
 /**
  * coro_runtime_by_id -- the runtime of a thread, by identity.

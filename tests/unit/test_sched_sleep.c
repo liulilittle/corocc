@@ -1,4 +1,5 @@
 #include "../harness.h"
+#include "arch/coro_atomic.h"
 #include <corocc/coro_sched.h>
 
 /* Scheduled sleep and timer wakeups.
@@ -84,29 +85,109 @@ static void* cancel_after_a_while(void* pv) {
    The body spins until released, so it never observes the cancel and never
    yields. */
 static coro_t*       g_busy_target;
-static volatile long g_busy_in_body;
-static volatile long g_busy_go;
+static uint64_t      g_busy_in_body;
+static uint64_t      g_busy_go;
 
 static void entry_busy_until_go(void* arg) {
     (void)arg;
-    g_busy_in_body = 1;
-    while (!g_busy_go) { /* spin: never yields, never observes the cancel */ }
+    coro_at_store(&g_busy_in_body, 1);
+    while (!coro_at_load(&g_busy_go)) { /* spin: never yields, never observes the cancel */ }
 }
 
 #if defined(_WIN32)
 static unsigned __stdcall cancel_running_then_release(void* pv) {
     (void)pv;
-    while (!g_busy_in_body) { /* wait until the body is running */ }
+    while (!coro_at_load(&g_busy_in_body)) { /* wait until the body is running */ }
     CHECK(coro_sched_cancel(g_sched, g_busy_target) == CORO_OK);
-    g_busy_go = 1;
+    coro_at_store(&g_busy_go, 1);
     return 0;
 }
 #else
 static void* cancel_running_then_release(void* pv) {
     (void)pv;
-    while (!g_busy_in_body) { /* wait until the body is running */ }
+    while (!coro_at_load(&g_busy_in_body)) { /* wait until the body is running */ }
     CHECK(coro_sched_cancel(g_sched, g_busy_target) == CORO_OK);
-    g_busy_go = 1;
+    coro_at_store(&g_busy_go, 1);
+    return NULL;
+}
+#endif
+
+/* ---- owner-side cancellation rescan (no cross-thread node pointer) ----
+   A batch of sleepers is cancelled from another thread while all are parked:
+   every one must observe the cancellation and none may be stranded. This is
+   the multiple-victim case of the run loop's timer-heap rescan. */
+#define CANCEL_BATCH 8u
+static coro_t*  g_batch[CANCEL_BATCH];
+static unsigned g_batch_canceled;
+
+static void entry_sleep_batch(void* arg) {
+    (void)arg;
+    coro_status st = coro_sched_sleep(g_sched,
+                                      coro_monotonic_ns() + 3000000000ull);
+    if (st == CORO_ECANCELED) ++g_batch_canceled;
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall cancel_all_after_a_while(void* pv) {
+    (void)pv;
+    Sleep(20); /* every batch sleeper is parked by now */
+    for (unsigned i = 0; i < CANCEL_BATCH; ++i) {
+        CHECK(coro_sched_cancel(g_sched, g_batch[i]) == CORO_OK);
+    }
+    return 0;
+}
+#else
+static void* cancel_all_after_a_while(void* pv) {
+    (void)pv;
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 20000000L;
+    nanosleep(&ts, NULL);
+    for (unsigned i = 0; i < CANCEL_BATCH; ++i) {
+        CHECK(coro_sched_cancel(g_sched, g_batch[i]) == CORO_OK);
+    }
+    return NULL;
+}
+#endif
+
+/* ---- the rescan wakes only the cancelled sleeper ----
+   One short sleeper and one long sleeper; only the long one is cancelled. The
+   long one must be cut short and observe the cancellation; the short one must
+   still wake on its own deadline (the rescan must not touch a sleeper without a
+   pending request). */
+static coro_t*  g_sel_long;
+static unsigned g_sel_long_canceled;
+static unsigned g_sel_short_ok;
+
+static void entry_sel_long(void* arg) {
+    (void)arg;
+    coro_status st = coro_sched_sleep(g_sched,
+                                      coro_monotonic_ns() + 3000000000ull);
+    if (st == CORO_ECANCELED) ++g_sel_long_canceled;
+}
+
+static void entry_sel_short(void* arg) {
+    (void)arg;
+    coro_status st = coro_sched_sleep(g_sched,
+                                      coro_monotonic_ns() + 30000000ull);
+    if (st == CORO_OK) ++g_sel_short_ok;
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall cancel_long_after_a_while(void* pv) {
+    (void)pv;
+    Sleep(20);
+    CHECK(coro_sched_cancel(g_sched, g_sel_long) == CORO_OK);
+    return 0;
+}
+#else
+static void* cancel_long_after_a_while(void* pv) {
+    (void)pv;
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 20000000L;
+    nanosleep(&ts, NULL);
+    CHECK(coro_sched_cancel(g_sched, g_sel_long) == CORO_OK);
     return NULL;
 }
 #endif
@@ -160,8 +241,8 @@ static void run_tests(void) {
        memory. Deterministic under ASan. */
     {
         g_busy_target = NULL;
-        g_busy_in_body = 0;
-        g_busy_go = 0;
+        coro_at_store(&g_busy_in_body, 0);
+        coro_at_store(&g_busy_go, 0);
         CHECK(coro_sched_spawn_h(s, NULL, entry_busy_until_go, NULL,
                                  &g_busy_target) == CORO_OK);
         CHECK(g_busy_target != NULL);
@@ -212,6 +293,62 @@ static void run_tests(void) {
         CHECK(coro_sched_pending(s) == 0u);
         CHECK(g_cancel_woken == 1u);
 #endif
+    }
+
+    /* ---------- a batch of parked sleepers cancelled from another thread ----
+       Every cancelled sleeper must be requeued by the owner's timer-heap
+       rescan and observe the cancellation; none may be stranded. */
+    {
+        g_batch_canceled = 0;
+        for (unsigned i = 0; i < CANCEL_BATCH; ++i) {
+            CHECK(coro_sched_spawn_h(s, NULL, entry_sleep_batch, NULL,
+                                     &g_batch[i]) == CORO_OK);
+            CHECK(g_batch[i] != NULL);
+        }
+        CHECK(coro_sched_pending(s) == CANCEL_BATCH);
+#if defined(_WIN32)
+        HANDLE bc = (HANDLE)_beginthreadex(NULL, 0, cancel_all_after_a_while,
+                                           NULL, 0, NULL);
+        CHECK(bc != NULL);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        WaitForSingleObject(bc, INFINITE);
+        CloseHandle(bc);
+#else
+        pthread_t bc;
+        CHECK(pthread_create(&bc, NULL, cancel_all_after_a_while, NULL) == 0);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        pthread_join(bc, NULL);
+#endif
+        CHECK(coro_sched_pending(s) == 0u);
+        CHECK(g_batch_canceled == CANCEL_BATCH);
+    }
+
+    /* ---------- the rescan leaves uncancelled sleepers alone ---------------- */
+    {
+        g_sel_long_canceled = 0;
+        g_sel_short_ok = 0;
+        g_sel_long = NULL;
+        CHECK(coro_sched_spawn_h(s, NULL, entry_sel_long, NULL,
+                                 &g_sel_long) == CORO_OK);
+        CHECK(g_sel_long != NULL);
+        CHECK(coro_sched_spawn(s, NULL, entry_sel_short, NULL) == CORO_OK);
+        CHECK(coro_sched_pending(s) == 2u);
+#if defined(_WIN32)
+        HANDLE lc = (HANDLE)_beginthreadex(NULL, 0, cancel_long_after_a_while,
+                                           NULL, 0, NULL);
+        CHECK(lc != NULL);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        WaitForSingleObject(lc, INFINITE);
+        CloseHandle(lc);
+#else
+        pthread_t lc;
+        CHECK(pthread_create(&lc, NULL, cancel_long_after_a_while, NULL) == 0);
+        CHECK(coro_sched_run(s) == CORO_OK);
+        pthread_join(lc, NULL);
+#endif
+        CHECK(coro_sched_pending(s) == 0u);
+        CHECK(g_sel_long_canceled == 1u); /* the cancelled sleeper woke early */
+        CHECK(g_sel_short_ok == 1u);      /* the bystander woke on its deadline */
     }
 
     /* cancelling something this scheduler does not own is refused */

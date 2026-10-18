@@ -72,6 +72,21 @@ int coro_timer_heap_push(coro_timer_heap* h, coro_timer_node* n);
 /** coro_timer_heap_top -- soonest deadline, NULL when empty. */
 coro_timer_node* coro_timer_heap_top(const coro_timer_heap* h);
 
+/** coro_timer_heap_count -- number of live deadlines (read-only). */
+size_t coro_timer_heap_count(const coro_timer_heap* h);
+
+/**
+ * coro_timer_heap_at -- the deadline at heap position i (read-only).
+ *
+ * Positions run 0..count-1 and follow the heap's internal order, which is NOT
+ * sorted: the entry point exists so the owner thread can scan the live
+ * deadlines for a property (a cancellation), never to pick the soonest one --
+ * coro_timer_heap_top is the accessor for that. Out-of-range positions return
+ * NULL. The caller must not mutate the heap while iterating; removal reorders
+ * the array, so a scan that also removes restarts after each removal.
+ */
+coro_timer_node* coro_timer_heap_at(const coro_timer_heap* h, size_t i);
+
 /**
  * coro_timer_heap_pop -- remove and return the soonest node.
  *
